@@ -1,6 +1,19 @@
 import { useEffect, useState } from "react";
 import { getModels } from "../api.js";
 
+function fmtPrice(cost) {
+  const perM = cost * 1e6;
+  if (perM === 0) return "free";
+  if (perM < 0.01) return `$${perM.toFixed(4)}/M`;
+  return `$${perM.toFixed(2)}/M`;
+}
+
+function fmtCtx(ctx) {
+  if (!ctx) return "";
+  if (ctx >= 1e6) return `${(ctx / 1e6).toFixed(0)}M ctx`;
+  return `${Math.round(ctx / 1e3)}k ctx`;
+}
+
 export default function ModelDropdown({ kind, label, value, onChange }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -9,14 +22,14 @@ export default function ModelDropdown({ kind, label, value, onChange }) {
   useEffect(() => {
     getModels(kind)
       .then(setData)
-      .catch((e) => setError(String(e.message || e)));
+      .catch((e) =>
+        setError(
+          `${String(e.message || e)} — is the PaperSkim backend running on :8000?`
+        )
+      );
   }, [kind]);
 
-  const models = data
-    ? showAll
-      ? data.advanced
-      : data.models
-    : [];
+  const models = data ? (showAll ? data.advanced : data.models) : [];
   const nAdvanced = data ? data.advanced.length - data.models.length : 0;
 
   return (
@@ -33,7 +46,9 @@ export default function ModelDropdown({ kind, label, value, onChange }) {
           <option value="">Select a model…</option>
           {models.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.name} {m.vision ? "· vision" : ""} (${m.prompt_cost.toFixed(6)}/tok)
+              {m.name}
+              {m.vision ? " · vision" : ""} · {fmtPrice(m.prompt_cost)}
+              {m.context_length ? ` · ${fmtCtx(m.context_length)}` : ""}
             </option>
           ))}
         </select>

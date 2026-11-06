@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getJob, pdfUrl, latexUrl } from "../api.js";
+import { getJob, pdfUrl, latexUrl, sourcePdfUrl } from "../api.js";
 
 export default function JobDetail({ id }) {
   const [job, setJob] = useState(null);
@@ -15,32 +15,51 @@ export default function JobDetail({ id }) {
 
   if (!job) return null;
   const done = job.status === "done" && job.pdf_path;
+  const title = job.title || job.arxiv_id;
 
   return (
     <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-white">
-          Job #{job.id} — {job.arxiv_id}
-        </h2>
-        {done && (
-          <div className="flex gap-3 text-sm">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold text-white truncate">#{job.id} — {title}</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {job.source_kind || "arxiv"}
+            {job.cost_usd != null && job.cost_usd > 0
+              ? ` · $${job.cost_usd.toFixed(4)}`
+              : ""}
+          </p>
+        </div>
+        <div className="flex gap-3 text-sm shrink-0">
+          {job.source_pdf_path && (
             <a
-              href={pdfUrl(job.id)}
+              href={sourcePdfUrl(job.id)}
               target="_blank"
               rel="noreferrer"
-              className="text-indigo-400 hover:underline"
+              className="text-slate-400 hover:text-slate-200 hover:underline"
             >
-              Open PDF
+              Original PDF
             </a>
-            <a
-              href={latexUrl(job.id)}
-              download
-              className="text-indigo-400 hover:underline"
-            >
-              Download LaTeX
-            </a>
-          </div>
-        )}
+          )}
+          {done && (
+            <>
+              <a
+                href={pdfUrl(job.id)}
+                target="_blank"
+                rel="noreferrer"
+                className="text-indigo-400 hover:underline"
+              >
+                Open PDF
+              </a>
+              <a
+                href={latexUrl(job.id)}
+                download
+                className="text-indigo-400 hover:underline"
+              >
+                Download LaTeX
+              </a>
+            </>
+          )}
+        </div>
       </div>
 
       {job.error && (

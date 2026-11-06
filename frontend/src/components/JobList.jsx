@@ -14,7 +14,7 @@ export default function JobList({ jobs, onSelect, selected }) {
   if (!jobs.length) {
     return (
       <p className="text-sm text-slate-500 py-6 text-center">
-        No jobs yet — paste an arXiv link above.
+        No jobs yet — paste a paper link above.
       </p>
     );
   }
@@ -30,11 +30,13 @@ export default function JobList({ jobs, onSelect, selected }) {
         >
           <div className="min-w-0">
             <p className="text-sm font-medium text-slate-200 truncate">
-              #{j.id} · {j.arxiv_id}
+              #{j.id} · {j.title || j.arxiv_id}
             </p>
             <p className="text-xs text-slate-500">
-              {j.target_pages}p · {j.writer_model} · {j.status}
+              {j.source_kind || "arxiv"} · {j.target_pages}p · {j.writer_model} ·{" "}
+              {j.status}
               {j.status === "queued" ? "" : ` · ${j.stage || "—"}`}
+              {j.cost_usd != null && j.cost_usd > 0 ? ` · $${j.cost_usd.toFixed(4)}` : ""}
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">

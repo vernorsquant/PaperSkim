@@ -1,27 +1,34 @@
 import { useEffect, useState } from "react";
-import { getSettings, listJobs, submitJob } from "./api.js";
+import { getHealth, getSettings, listJobs } from "./api.js";
 import JobForm from "./components/JobForm.jsx";
 import JobList from "./components/JobList.jsx";
 import JobDetail from "./components/JobDetail.jsx";
+import SearchModal from "./components/SearchModal.jsx";
 import SettingsModal from "./components/SettingsModal.jsx";
 
 export default function App() {
   const [hasKey, setHasKey] = useState(null);
+  const [keyStatus, setKeyStatus] = useState("unchecked");
+  const [health, setHealth] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [selected, setSelected] = useState(null);
   const [error, setError] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [prefill, setPrefill] = useState("");
 
   const refreshSettings = () =>
     getSettings()
       .then((s) => {
         setHasKey(s.has_key);
+        setKeyStatus(s.key_status || "unchecked");
         if (!s.has_key) setShowSettings(true);
       })
       .catch(() => setHasKey(false));
 
   useEffect(() => {
     refreshSettings();
+    getHealth().then(setHealth).catch(() => {});
     const t = setInterval(() => {
       listJobs().then(setJobs).catch(() => {});
     }, 2000);
@@ -29,10 +36,10 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
-  const onSubmit = async (body) => {
+  const onSubmit = async (submitFn) => {
     setError("");
     try {
-      const { id } = await submitJob(body);
+      const { id } = await submitFn();
       const jobs2 = await listJobs();
       setJobs(jobs2);
       setSelected(id);
@@ -40,6 +47,12 @@ export default function App() {
       setError(String(e.message || e));
     }
   };
+
+  const missingTools = health
+    ? ["tectonic", "pdftotext", "pdfinfo"].filter((t) => !health[t])
+    : [];
+
+  const keyBroken = hasKey && ["expired", "invalid"].includes(keyStatus);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -49,19 +62,42 @@ export default function App() {
             Paper<span className="text-indigo-400">Skim</span>
           </h1>
           <p className="text-sm text-slate-400">
-            Condense arXiv papers into short, undergrad-readable PDFs
+            Condense papers into short, undergrad-readable PDFs
           </p>
         </div>
         <button
           onClick={() => setShowSettings(true)}
-          className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800"
+          className={`rounded-lg border px-4 py-2 text-sm hover:bg-slate-800 ${
+            keyBroken
+              ? "border-red-700 text-red-300"
+              : "border-slate-700"
+          }`}
         >
-          {hasKey ? "Settings" : "Set API key"}
+          {keyBroken
+            ? `API key ${keyStatus} — fix`
+            : hasKey
+              ? "Settings"
+              : "Set API key"}
         </button>
       </header>
 
       <main className="mx-auto max-w-4xl px-8 py-8 space-y-8">
-        <JobForm onSubmit={onSubmit} disabled={hasKey === false} />
+        {missingTools.length > 0 && (
+          <div className="rounded-lg border border-yellow-800 bg-yellow-950/40 px-4 py-3 text-sm text-yellow-300">
+            Missing tools on this machine: {missingTools.join(", ")}. PDF jobs will
+            fail without <code>pdftotext</code>/<code>pdfinfo</code> (poppler), and
+            nothing compiles without <code>tectonic</code>. See README for install
+            commands.
+          </div>
+        )}
+
+        <JobForm
+          onSubmit={onSubmit}
+          disabled={hasKey === false}
+          onOpenSearch={() => setShowSearch(true)}
+          prefill={prefill}
+          setPrefill={setPrefill}
+        />
         {error && (
           <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-300">
             {error}
@@ -71,11 +107,28 @@ export default function App() {
         {selected && <JobDetail id={selected} />}
       </main>
 
+      {showSearch && (
+        <SearchModal
+          onClose={() => setShowSearch(false)}
+          onPick={(paper) => {
+            const s =
+              paper.kind === "arxiv"
+                ? `arXiv:${paper.ref}`
+                : paper.kind === "doi"
+                  ? paper.ref
+                  : paper.ref;
+            setPrefill(s);
+            setShowSearch(false);
+          }}
+        />
+      )}
+
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}
           onSaved={() => {
             setHasKey(true);
+            setKeyStatus("valid");
             setShowSettings(false);
           }}
         />
