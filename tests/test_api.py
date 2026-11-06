@@ -16,6 +16,7 @@ def app(tmp_path, monkeypatch):
     return create_app(
         db_path=tmp_path / "db.sqlite",
         data_dir=tmp_path / "data",
+        config_path=tmp_path / "paperskim.toml",
         start_queue=False,
     )
 
@@ -38,7 +39,12 @@ def _submit(client, **over):
 
 def test_submit_rejects_missing_key(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    app = create_app(db_path=tmp_path / "db.sqlite", data_dir=tmp_path / "data")
+    app = create_app(
+        db_path=tmp_path / "db.sqlite",
+        data_dir=tmp_path / "data",
+        config_path=tmp_path / "paperskim.toml",
+        start_queue=False,
+    )
     c = TestClient(app)
     r = _submit(c)
     assert r.status_code == 400
