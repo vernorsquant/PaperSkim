@@ -1,4 +1,4 @@
-"""SQLite job store."""
+"""SQLite job store with forward migrations."""
 
 from __future__ import annotations
 
@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS jobs (
 )
 """
 
+# Applied to pre-v0.2 databases; no-ops on fresh ones (columns already in schema).
+_MIGRATION_COLUMNS: dict[str, str] = {
+    "source_kind": "TEXT NOT NULL DEFAULT 'arxiv'",
+    "title": "TEXT NOT NULL DEFAULT ''",
+    "source_pdf_path": "TEXT",
+    "cost_usd": "REAL",
+}
+
 _ALLOWED_FIELDS = {
     "status",
     "stage",
@@ -38,6 +46,10 @@ _ALLOWED_FIELDS = {
     "tex_path",
     "captions_path",
     "rounds",
+    "source_kind",
+    "title",
+    "source_pdf_path",
+    "cost_usd",
 }
 
 
@@ -46,8 +58,16 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute(_SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for name, decl in _MIGRATION_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
 
 
 def _serialize(job: sqlite3.Row) -> dict:
@@ -64,11 +84,22 @@ def create_job(
     target_pages: int,
     writer_model: str,
     vision_model: str,
+    source_kind: str = "arxiv",
+    title: str = "",
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO jobs (arxiv_input, arxiv_id, target_pages, writer_model, vision_model)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (arxiv_input, arxiv_id, target_pages, writer_model, vision_model),
+        "INSERT INTO jobs (arxiv_input, arxiv_id, target_pages, writer_model,"
+        " vision_model, source_kind, title)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            arxiv_input,
+            arxiv_id,
+            target_pages,
+            writer_model,
+            vision_model,
+            source_kind,
+            title,
+        ),
     )
     conn.commit()
     if cur.lastrowid is None:

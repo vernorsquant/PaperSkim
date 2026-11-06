@@ -41,3 +41,40 @@ def test_list_orders_newest_first(conn):
     b = create_job(conn, "y", "2", 3, "w", "v")
     jobs = list_jobs(conn)
     assert [j["id"] for j in jobs] == [b, a]
+
+
+def test_migration_from_legacy_schema(tmp_path):
+    import sqlite3
+
+    from backend.app.db import _SCHEMA, _MIGRATION_COLUMNS
+
+    legacy = _SCHEMA.split("source_kind")[0]  # drop everything we added
+    p = tmp_path / "legacy.db"
+    c = sqlite3.connect(p)
+    c.row_factory = sqlite3.Row
+    c.execute(legacy.rstrip().rstrip(";") + ";")
+    c.commit()
+    c.close()
+
+    from pathlib import Path
+
+    from backend.app.db import init_db
+
+    conn = init_db(Path(p))
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for name in _MIGRATION_COLUMNS:
+        assert name in cols
+    jid = create_job(conn, "in", "ref", 4, "w", "v", source_kind="doi", title="T")
+    job = get_job(conn, jid)
+    assert job["source_kind"] == "doi"
+    assert job["title"] == "T"
+    update_job(conn, jid, cost_usd=0.5, source_pdf_path="/tmp/x.pdf")
+    assert get_job(conn, jid)["cost_usd"] == 0.5
+
+
+def test_new_schema_has_v2_columns(tmp_path):
+    from pathlib import Path
+
+    conn = init_db(tmp_path / "fresh.db")
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    assert {"source_kind", "title", "source_pdf_path", "cost_usd"} <= cols

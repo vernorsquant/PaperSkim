@@ -33,3 +33,46 @@ def test_masked():
     assert masked_key(short) == ""
     empty = Settings(api_key="", data_dir=None, config_path=None)
     assert masked_key(empty) == ""
+
+
+import httpx
+import pytest
+import respx
+
+from backend.app.settings import validate_key
+
+KEY_URL = "https://openrouter.ai/api/v1/key"
+
+
+@respx.mock
+def test_validate_key_valid():
+    respx.get(KEY_URL).respond(200, json={"data": {"label": "my key"}})
+    out = validate_key("good-key", client=httpx.Client())
+    assert out["status"] == "valid"
+    assert "my key" in out["message"]
+
+
+@respx.mock
+def test_validate_key_expired():
+    respx.get(KEY_URL).respond(401, json={"error": {"message": "API key expired."}})
+    out = validate_key("old-key", client=httpx.Client())
+    assert out["status"] == "expired"
+    assert "openrouter.ai/keys" in out["message"]
+
+
+@respx.mock
+def test_validate_key_invalid():
+    respx.get(KEY_URL).respond(401, json={"error": {"message": "Invalid token"}})
+    out = validate_key("bad-key", client=httpx.Client())
+    assert out["status"] == "invalid"
+
+
+@respx.mock
+def test_validate_key_network_error_is_soft():
+    respx.get(KEY_URL).mock(side_effect=httpx.ConnectError("no dns"))
+    out = validate_key("some-key", client=httpx.Client())
+    assert out["status"] == "error"
+
+
+def test_validate_key_empty():
+    assert validate_key("")["status"] == "invalid"

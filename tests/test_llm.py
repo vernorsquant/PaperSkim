@@ -91,3 +91,40 @@ def test_vision_drops_unsupported_formats(tmp_path):
     parts = body["messages"][0]["content"]
     urls = [p["image_url"]["url"] for p in parts if p["type"] == "image_url"]
     assert len(urls) == 1  # only the png survives
+
+
+@respx.mock
+def test_chat_401_fails_fast_with_actionable_message():
+    route = respx.post(URL).respond(
+        401, json={"error": {"message": "API key expired."}}
+    )
+    with pytest.raises(LLMError) as exc:
+        CLIENT.chat("m1", [{"role": "user", "content": "hi"}])
+    assert route.call_count == 1  # no retry on auth errors
+    assert "expired" in str(exc.value)
+    assert "openrouter.ai/keys" in str(exc.value)
+
+
+@respx.mock
+def test_chat_402_credits_message():
+    respx.post(URL).respond(402, json={"error": {"message": "Insufficient credits"}})
+    with pytest.raises(LLMError) as exc:
+        CLIENT.chat("m1", [{"role": "user", "content": "hi"}])
+    assert "credits" in str(exc.value).lower()
+
+
+@respx.mock
+def test_chat_accumulates_cost_and_requests_usage():
+    route = respx.post(URL).respond(
+        200,
+        json={
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.01},
+        },
+    )
+    c = OpenRouterClient(api_key="k")
+    c.chat("m1", [{"role": "user", "content": "hi"}])
+    c.chat("m1", [{"role": "user", "content": "hi"}])
+    assert c.total_cost == pytest.approx(0.02)
+    body = json_body(route)
+    assert body["usage"] == {"include": True}

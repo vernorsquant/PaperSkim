@@ -43,6 +43,7 @@ class ModelInfo:
     name: str
     pricing: dict
     vision: bool
+    context_length: int = 0
 
 
 @dataclass
@@ -52,6 +53,7 @@ class RankedModel:
     vision: bool
     tier: int
     prompt_cost: float
+    context_length: int = 0
 
 
 def vision_capable(m: ModelInfo) -> bool:
@@ -85,6 +87,7 @@ def fetch_models(api_key: str, client: httpx.Client | None = None) -> list[Model
                 pricing=m.get("pricing", {}) or {},
                 vision="image"
                 in ((m.get("architecture") or {}).get("input_modalities") or []),
+                context_length=int(m.get("context_length") or 0),
             )
             for m in raw
         ]
@@ -113,6 +116,7 @@ def rank_models(
             vision=m.vision,
             tier=_tier_for(m.id, tm),
             prompt_cost=_prompt_cost(m),
+            context_length=m.context_length,
         )
         for m in models
     ]
@@ -136,6 +140,7 @@ def rank_models(
                 vision=r.vision,
                 tier=r.tier,
                 prompt_cost=r.prompt_cost,
+                context_length=r.context_length,
             )
     frontier = list(families.values())
     # per-tier cheapest-first ranking (a strict dominance cut collapses to 2-3

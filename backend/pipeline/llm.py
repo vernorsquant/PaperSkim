@@ -1,4 +1,4 @@
-"""OpenRouter chat/vision client with retry."""
+"""OpenRouter chat/vision client: retry on transient errors, clear auth errors, cost tracking."""
 
 from __future__ import annotations
 
@@ -9,6 +9,15 @@ from pathlib import Path
 import httpx
 
 _RETRY_BACKOFF_S = 2.0
+
+# Auth/credit failures never succeed on retry — fail fast with an actionable message.
+_STATUS_HINTS = {
+    401: "OpenRouter rejected the API key (401). It may be expired or deleted — generate a "
+    "new one at openrouter.ai/keys and update it in Settings.",
+    402: "OpenRouter returned 402: out of credits. Top up at openrouter.ai/credits.",
+    403: "OpenRouter returned 403: this model may require moderation approval or is "
+    "unavailable in your region. Try a different model.",
+}
 
 
 class LLMError(RuntimeError):
@@ -24,6 +33,14 @@ _MIME_BY_SUFFIX = {
 }
 
 
+def _error_message(response: httpx.Response) -> str:
+    try:
+        err = response.json().get("error") or {}
+        return str(err.get("message") or "")
+    except ValueError:
+        return ""
+
+
 class OpenRouterClient:
     def __init__(
         self,
@@ -31,6 +48,7 @@ class OpenRouterClient:
         base_url: str = "https://openrouter.ai/api/v1",
         timeout: float = 600.0,
     ):
+        self.total_cost = 0.0
         self._http = httpx.Client(
             base_url=base_url,
             headers={
@@ -53,12 +71,17 @@ class OpenRouterClient:
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "usage": {"include": True},
         }
         attempts = retries + 1
         last_err: Exception | None = None
         for attempt in range(attempts):
             try:
                 r = self._http.post("/chat/completions", json=payload)
+                if r.status_code in _STATUS_HINTS:
+                    detail = _error_message(r)
+                    hint = _STATUS_HINTS[r.status_code]
+                    raise LLMError(f"{hint} ({detail})" if detail else hint)
                 if r.status_code >= 500:
                     raise httpx.HTTPStatusError(
                         f"server error {r.status_code}",
@@ -67,6 +90,11 @@ class OpenRouterClient:
                     )
                 r.raise_for_status()
                 data = r.json()
+                usage = data.get("usage") or {}
+                try:
+                    self.total_cost += float(usage.get("cost") or 0.0)
+                except (TypeError, ValueError):
+                    pass
                 return data["choices"][0]["message"]["content"] or ""
             except (httpx.TransportError, httpx.HTTPStatusError) as e:
                 last_err = e
