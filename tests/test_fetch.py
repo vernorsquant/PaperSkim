@@ -63,6 +63,19 @@ def test_fetch_prefers_latex(tmp_path):
 
 
 @respx.mock
+def test_fetch_follows_redirect(tmp_path):
+    body = _make_tar_gz()
+    respx.get("https://export.arxiv.org/e-print/2401.12345").respond(
+        301, headers={"Location": "https://export.arxiv.org/src/2401.12345"}
+    )
+    respx.get("https://export.arxiv.org/src/2401.12345").respond(
+        200, content=body, headers={"Content-Type": "application/x-eprint-tar"}
+    )
+    bundle = fetch_source("2401.12345", tmp_path)
+    assert bundle.kind == "latex"
+
+
+@respx.mock
 def test_fetch_falls_back_to_pdf(tmp_path):
     pdf = b"%PDF-1.4 fake"
     respx.get("https://export.arxiv.org/e-print/2401.12345").respond(

@@ -52,7 +52,7 @@ def fetch_source(
 ) -> SourceBundle:
     dest_dir.mkdir(parents=True, exist_ok=True)
     own = client is None
-    c = client if client is not None else httpx.Client(timeout=120)
+    c = client if client is not None else httpx.Client(timeout=120, follow_redirects=True)
     try:
         r = c.get(f"{EPRINT_URL}/{arxiv_id}")
         r.raise_for_status()
