@@ -138,16 +138,7 @@ def rank_models(
                 prompt_cost=r.prompt_cost,
             )
     frontier = list(families.values())
-    # dominance: a is dominated if b has tier >= a.tier and cost <= a.cost (one strict)
-    kept: list[RankedModel] = []
-    for a in frontier:
-        dominated = any(
-            (b.tier >= a.tier and b.prompt_cost <= a.prompt_cost)
-            and (b.tier > a.tier or b.prompt_cost < a.prompt_cost)
-            for b in frontier
-            if b is not a
-        )
-        if not dominated:
-            kept.append(a)
-    kept.sort(key=lambda r: (-r.tier, r.prompt_cost, r.id))
-    return kept
+    # per-tier cheapest-first ranking (a strict dominance cut collapses to 2-3
+    # models against live pricing; the UI wants the strongest cheap pick per tier)
+    frontier.sort(key=lambda r: (-r.tier, r.prompt_cost, r.id))
+    return frontier

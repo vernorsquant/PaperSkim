@@ -56,7 +56,10 @@ def test_rank_prefers_frontier(monkeypatch):
         ModelInfo(id="test/t2", name="M", pricing={"prompt": "0.0000005"}, vision=False),
     ]
     ranked = rank_models(models)
-    assert [r.id for r in ranked] == ["test/t3", "test/t2"]
+    ids = [r.id for r in ranked]
+    # sorted strongest-tier-first, cheapest-first within tier; pricey tier-3
+    # still listed (below the cheap one) but tier-2 follows after tier-3
+    assert ids == ["test/t3", "test/t3-pricey", "test/t2"]
     assert ranked[0].tier == 3
     assert ranked[0].prompt_cost == 0.000001
 
