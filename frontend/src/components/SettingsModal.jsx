@@ -1,0 +1,61 @@
+import { useState } from "react";
+import { saveKey } from "../api.js";
+
+export default function SettingsModal({ onClose, onSaved }) {
+  const [key, setKey] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await saveKey(key.trim());
+      onSaved();
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <form
+        onSubmit={save}
+        className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-4"
+      >
+        <h2 className="text-lg font-semibold text-white">OpenRouter API key</h2>
+        <p className="text-sm text-slate-400">
+          Stored locally in <code className="text-slate-300">backend/paperskim.toml</code>{" "}
+          (chmod 600, never committed).
+        </p>
+        <input
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="sk-or-v1-…"
+          autoFocus
+          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-200 placeholder-slate-600 focus:border-indigo-500 focus:outline-none"
+        />
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !key.trim()}
+            className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+          >
+            Save
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
