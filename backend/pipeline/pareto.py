@@ -116,16 +116,38 @@ def rank_models(
         )
         for m in models
     ]
+    # drop free/batch/variable-priced variants: cost<=0 is pricing noise that
+    # would otherwise dominate the frontier
+    ranked = [r for r in ranked if r.prompt_cost > 0]
+    # collapse variants (id:free, id:batch, id:thinking...) onto the base id:
+    # keep the cheapest variant per family, prefer the exact base id
+    families: dict[str, RankedModel] = {}
+    for r in ranked:
+        family = r.id.split(":", 1)[0]
+        cur = families.get(family)
+        if (
+            cur is None
+            or r.id == family
+            or (cur.id != family and r.prompt_cost < cur.prompt_cost)
+        ):
+            families[family] = RankedModel(
+                id=family,
+                name=r.name,
+                vision=r.vision,
+                tier=r.tier,
+                prompt_cost=r.prompt_cost,
+            )
+    frontier = list(families.values())
     # dominance: a is dominated if b has tier >= a.tier and cost <= a.cost (one strict)
-    frontier: list[RankedModel] = []
-    for a in ranked:
+    kept: list[RankedModel] = []
+    for a in frontier:
         dominated = any(
             (b.tier >= a.tier and b.prompt_cost <= a.prompt_cost)
             and (b.tier > a.tier or b.prompt_cost < a.prompt_cost)
-            for b in ranked
+            for b in frontier
             if b is not a
         )
         if not dominated:
-            frontier.append(a)
-    frontier.sort(key=lambda r: (-r.tier, r.prompt_cost, r.id))
-    return frontier
+            kept.append(a)
+    kept.sort(key=lambda r: (-r.tier, r.prompt_cost, r.id))
+    return kept

@@ -59,3 +59,28 @@ def test_rank_prefers_frontier(monkeypatch):
     assert [r.id for r in ranked] == ["test/t3", "test/t2"]
     assert ranked[0].tier == 3
     assert ranked[0].prompt_cost == 0.000001
+
+
+def test_rank_ignores_free_and_negative_costs(monkeypatch):
+    monkeypatch.setattr(pareto, "TIER_MAP", {"test/t3": 3})
+    models = [
+        ModelInfo(id="test/t3:free", name="F", pricing={"prompt": "0"}, vision=True),
+        ModelInfo(id="test/t3:batch", name="B", pricing={"prompt": "-1"}, vision=False),
+        ModelInfo(id="other/junk", name="J", pricing={"prompt": "-1"}, vision=False),
+        ModelInfo(id="test/t3", name="C", pricing={"prompt": "0.000001"}, vision=True),
+    ]
+    ranked = rank_models(models)
+    ids = [r.id for r in ranked]
+    assert "test/t3:free" not in ids
+    assert "other/junk" not in ids
+    assert ids[0] == "test/t3"
+
+
+def test_rank_dedupes_variants_keeps_base(monkeypatch):
+    monkeypatch.setattr(pareto, "TIER_MAP", {"test/t3": 3})
+    models = [
+        ModelInfo(id="test/t3", name="C", pricing={"prompt": "0.000002"}, vision=True),
+        ModelInfo(id="test/t3:thinking", name="CT", pricing={"prompt": "0.000001"}, vision=True),
+    ]
+    ranked = rank_models(models)
+    assert [r.id for r in ranked] == ["test/t3"]
