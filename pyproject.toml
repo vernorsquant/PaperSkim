@@ -1,0 +1,21 @@
+[project]
+name = "paperskim"
+version = "0.1.0"
+description = "Condense arXiv papers into short, undergrad-readable PDFs"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "pytest",
+    "pytest-asyncio",
+]
+
+[dependency-groups]
+dev = [
+    "respx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
