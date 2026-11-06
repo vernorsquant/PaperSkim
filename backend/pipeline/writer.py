@@ -142,6 +142,7 @@ def write_and_refine(
     workdir: Path,
     max_rounds: int = 3,
     compile_fn=None,
+    on_stage=None,
 ) -> IterationResult:
     if compile_fn is None:
         from backend.pipeline.compiler import compile_tex
@@ -154,6 +155,8 @@ def write_and_refine(
     tex = draft_once(client, writer_model, paper, captions, target_pages, fig_map)
     tex_path.write_text(tex)
     res = compile_fn(tex_path, workdir)
+    if on_stage:
+        on_stage("draft")
 
     # single self-repair pass on compile failure
     if not res.ok:
@@ -180,6 +183,8 @@ def write_and_refine(
             res = compile_fn(tex_path, workdir)
 
     for round_no in range(1, max_rounds + 1):
+        if on_stage:
+            on_stage("review")
         verdict = review(client, reviewer_model, paper, tex)
         if verdict.passed:
             return IterationResult(
@@ -190,6 +195,8 @@ def write_and_refine(
                 passed=True,
             )
         critique = "\n".join(f"- {c}" for c in verdict.critique)
+        if on_stage and round_no < max_rounds:
+            on_stage("revise")
         tex = draft_once(
             client,
             writer_model,
