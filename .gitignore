@@ -8,3 +8,4 @@ backend/paperskim.toml
 backend/data/
 .superpowers/
 .env
+.hermes/
