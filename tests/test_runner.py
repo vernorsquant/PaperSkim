@@ -28,9 +28,9 @@ def fake_paper(tmp_path):
     )
 
 
-def patch_happy(monkeypatch, tmp_path):
+def patch_happy(monkeypatch, tmp_path, n_figures=1, refine_passed=True):
     from backend.pipeline.compiler import CompileResult
-    from backend.pipeline.extract import Paper
+    from backend.pipeline.extract import Figure, Paper
     from backend.pipeline.fetch import SourceBundle
     from backend.pipeline.writer import IterationResult
 
@@ -39,25 +39,40 @@ def patch_happy(monkeypatch, tmp_path):
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF")
 
+    figs = []
+    for i in range(n_figures):
+        f = tmp_path / f"f{i}.png"
+        f.write_bytes(b"png")
+        figs.append(Figure(f, f"cap {i}"))
+
     monkeypatch.setattr(
         runner, "fetch_source", lambda *a, **k: SourceBundle("latex", Path("/t.tar.gz"), [])
     )
-    monkeypatch.setattr(runner, "extract_paper", lambda *a, **k: fake_paper(tmp_path))
+    monkeypatch.setattr(
+        runner,
+        "extract_paper",
+        lambda *a, **k: Paper("2401.12345", "T", "text", [], figs, []),
+    )
     monkeypatch.setattr(
         runner,
         "select_figures",
-        lambda figures, cap=12: figures,
+        lambda figures, cap=12: figures[:cap],
     )
     monkeypatch.setattr(
         runner, "describe_figures", lambda client, model, figures, **k: {}
     )
+
+    seen = {}
     monkeypatch.setattr(
         runner,
         "write_and_refine",
-        lambda *a, **k: (k.get("on_stage") or (lambda s: None))("review")
-        or IterationResult(tex, pdf, 3, 1, True),
+        lambda client, wm, rm, paper, captions, tp, wd, **k: (
+            seen.__setitem__("n_figures", len(paper.figures))
+            or (k.get("on_stage") or (lambda s: None))("review")
+            or IterationResult(tex, pdf, 3, 1, refine_passed)
+        ),
     )
-    return tex, pdf
+    return tex, pdf, seen
 
 
 def test_run_job_happy_path(tmp_path, monkeypatch):
@@ -73,6 +88,32 @@ def test_run_job_happy_path(tmp_path, monkeypatch):
     assert job["stages"] == ["fetch", "extract", "vision", "draft", "review", "done"]
     assert job["tex_path"] and job["pdf_path"]
     assert job["rounds"] == 1
+
+
+def test_run_job_caps_figures_passed_to_writer(tmp_path, monkeypatch):
+    _, _, seen = patch_happy(monkeypatch, tmp_path, n_figures=14)
+    conn = init_db(tmp_path / "db.sqlite")
+    s = make_settings(tmp_path)
+    jid = create_job(conn, "2401.12345", "2401.12345", 3, "w", "v")
+
+    runner.run_job(jid, s, conn, client=object())
+
+    job = get_job(conn, jid)
+    assert job["status"] == "done"
+    assert seen["n_figures"] == 12
+
+
+def test_run_job_review_failed_still_done_with_warning(tmp_path, monkeypatch):
+    patch_happy(monkeypatch, tmp_path, refine_passed=False)
+    conn = init_db(tmp_path / "db.sqlite")
+    s = make_settings(tmp_path)
+    jid = create_job(conn, "2401.12345", "2401.12345", 3, "w", "v")
+
+    runner.run_job(jid, s, conn, client=object())
+
+    job = get_job(conn, jid)
+    assert job["status"] == "done"
+    assert any("reviewer" in w.lower() for w in job["warnings"])
 
 
 def test_run_job_failure_sets_error(tmp_path, monkeypatch):

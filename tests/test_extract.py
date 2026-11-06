@@ -60,3 +60,56 @@ def test_pdf_fallback_text_only(simple_pdf, tmp_path):
     assert "Hello PDF world" in paper.full_text
     assert paper.figures == []
     assert paper.warnings
+
+
+def test_input_traversal_blocked(tmp_path):
+    # tarball tries to \input a file OUTSIDE the extraction root
+    members = {
+        "main.tex": b"\\documentclass{article}\\begin{document}\\input{../secret}\\end{document}",
+    }
+    work = tmp_path / "work"
+    root = work / "source"
+    root.mkdir(parents=True)
+    secret = work / "secret.tex"
+    secret.write_text("TOP SECRET CONTENT")
+    from backend.pipeline.extract import _flatten
+
+    text = _flatten(members["main.tex"].decode(), root, {root / "main.tex"})
+    assert "TOP SECRET" not in text
+
+
+def test_absolute_includegraphics_blocked(tmp_path):
+    from backend.pipeline.extract import Figure, _extract_figures
+
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"png")
+    text = "\\begin{figure}\\includegraphics{" + str(outside) + "}\\caption{x}\\end{figure}"
+    root = tmp_path / "src"
+    root.mkdir()
+    figs = _extract_figures(root, text)
+    assert figs == []
+
+
+def test_relative_traversal_includegraphics_blocked(tmp_path):
+    from backend.pipeline.extract import _extract_figures
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "outside.png").write_bytes(b"png")
+    text = "\\begin{figure}\\includegraphics{../outside.png}\\caption{x}\\end{figure}"
+    figs = _extract_figures(tmp_path / "src", text)
+    assert figs == []
+
+
+def test_caption_nested_braces_full(tmp_path):
+    from backend.pipeline.extract import _extract_figures
+
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "fig1.png").write_bytes(b"png")
+    text = (
+        "\\begin{figure}\\includegraphics{fig1.png}"
+        "\\caption{Speedup ($\\alpha$, \\textbf{bold}) over baseline.}"
+        "\\end{figure}"
+    )
+    figs = _extract_figures(root, text)
+    assert figs[0].caption == "Speedup ($\\alpha$, \\textbf{bold}) over baseline."

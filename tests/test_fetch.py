@@ -88,3 +88,26 @@ def test_fetch_falls_back_to_pdf(tmp_path):
     assert isinstance(bundle, SourceBundle)
     assert bundle.kind == "pdf"
     assert len(bundle.warnings) == 1
+
+
+@respx.mock
+def test_fetch_404_falls_back_to_pdf(tmp_path):
+    pdf = b"%PDF-1.4 fake"
+    respx.get("https://export.arxiv.org/e-print/9999.99999").respond(404)
+    respx.get("https://export.arxiv.org/pdf/9999.99999").respond(
+        200, content=pdf, headers={"Content-Type": "application/pdf"}
+    )
+    bundle = fetch_source("9999.99999", tmp_path, client=httpx.Client())
+    assert bundle.kind == "pdf"
+    assert bundle.warnings
+
+
+@respx.mock
+def test_fetch_bare_tex_source(tmp_path):
+    tex = b"\\documentclass{article}\\begin{document}single file\\end{document}"
+    respx.get("https://export.arxiv.org/e-print/2401.12345").respond(
+        200, content=tex, headers={"Content-Type": "application/x-eprint"}
+    )
+    bundle = fetch_source("2401.12345", tmp_path, client=httpx.Client())
+    assert bundle.kind == "latex"
+    assert b"single file" in bundle.path.read_bytes()

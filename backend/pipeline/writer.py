@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,6 +110,26 @@ def draft_once(
     return _strip_fences(client.chat(model, messages))
 
 
+# Untrusted LLM output must not read arbitrary files into the compiled PDF.
+_DANGEROUS_TEX_RE = re.compile(
+    r"\\(?:input|include|openin|openoutput|read|write(?:18)?|directlua|luaexec)\b[^\n]*"
+)
+_INCLUDEGRAPHICS_TEX_RE = re.compile(
+    r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}"
+)
+
+
+def _sanitize_tex(tex: str, allowed_figs: list[str]) -> str:
+    tex = _DANGEROUS_TEX_RE.sub("", tex)
+    allowed = {p.replace("\\", "/") for p in allowed_figs}
+
+    def repl(m: re.Match) -> str:
+        norm = m.group(1).strip().replace("\\", "/")
+        return m.group(0) if norm in allowed else ""
+
+    return _INCLUDEGRAPHICS_TEX_RE.sub(repl, tex)
+
+
 @dataclass
 class IterationResult:
     tex_path: Path
@@ -132,6 +153,10 @@ def _page_adjustment(pages: int, target: int) -> str | None:
     )
 
 
+def _write_tex(tex: str, fig_map: dict[str, str], tex_path: Path) -> None:
+    tex_path.write_text(_sanitize_tex(tex, list(fig_map.values())))
+
+
 def write_and_refine(
     client,
     writer_model: str,
@@ -153,7 +178,7 @@ def write_and_refine(
     fig_map = copy_figure_assets(paper, workdir)
 
     tex = draft_once(client, writer_model, paper, captions, target_pages, fig_map)
-    tex_path.write_text(tex)
+    _write_tex(tex, fig_map, tex_path)
     res = compile_fn(tex_path, workdir)
     if on_stage:
         on_stage("draft")
@@ -170,7 +195,7 @@ def write_and_refine(
             adjust=f"Your previous LaTeX failed to compile. Error log:\n{truncate(res.log, 4000)}\n"
             "Return corrected, complete LaTeX.",
         )
-        tex_path.write_text(tex)
+        _write_tex(tex, fig_map, tex_path)
         res = compile_fn(tex_path, workdir)
     else:
         # single page-budget adjustment
@@ -179,7 +204,7 @@ def write_and_refine(
             tex = draft_once(
                 client, writer_model, paper, captions, target_pages, fig_map, adjustment
             )
-            tex_path.write_text(tex)
+            _write_tex(tex, fig_map, tex_path)
             res = compile_fn(tex_path, workdir)
 
     for round_no in range(1, max_rounds + 1):
@@ -206,7 +231,7 @@ def write_and_refine(
             fig_map,
             adjust=f"The reviewer rejected the draft. Fix every point:\n{critique}",
         )
-        tex_path.write_text(tex)
+        _write_tex(tex, fig_map, tex_path)
         res = compile_fn(tex_path, workdir)
 
     return IterationResult(

@@ -54,18 +54,47 @@ def fetch_source(
     own = client is None
     c = client if client is not None else httpx.Client(timeout=120, follow_redirects=True)
     try:
-        r = c.get(f"{EPRINT_URL}/{arxiv_id}")
-        r.raise_for_status()
-        ctype = r.headers.get("content-type", "").lower()
-        if "pdf" not in ctype:
-            path = dest_dir / f"{_safe_name(arxiv_id)}.tar.gz"
-            path.write_bytes(r.content)
-            try:
-                with tarfile.open(path) as tf:
-                    tf.getmembers()
-                return SourceBundle(kind="latex", path=path, warnings=[])
-            except (tarfile.TarError, EOFError):
-                path.unlink(missing_ok=True)
+        try:
+            r = c.get(f"{EPRINT_URL}/{arxiv_id}")
+            r.raise_for_status()
+        except httpx.HTTPStatusError:
+            r = None
+        if r is not None:
+            ctype = r.headers.get("content-type", "").lower()
+            if "pdf" not in ctype:
+                path = dest_dir / f"{_safe_name(arxiv_id)}.tar.gz"
+                path.write_bytes(r.content)
+                try:
+                    with tarfile.open(path) as tf:
+                        tf.getmembers()
+                    return SourceBundle(kind="latex", path=path, warnings=[])
+                except (tarfile.TarError, EOFError):
+                    # tar failed: maybe a bare (possibly gzipped) single .tex
+                    raw = r.content
+                    if raw[:2] == b"\x1f\x8b":
+                        try:
+                            import gzip
+
+                            raw = gzip.decompress(raw)
+                        except OSError:
+                            raw = r.content
+                    if b"\\documentclass" in raw:
+                        path.unlink(missing_ok=True)
+                        tex_path = dest_dir / f"{_safe_name(arxiv_id)}.tex"
+                        tex_path.write_bytes(raw)
+                        return SourceBundle(
+                            kind="latex",
+                            path=tex_path,
+                            warnings=["source was a single .tex file (not a tarball)"],
+                        )
+                    path.unlink(missing_ok=True)
+            elif "pdf" in ctype:
+                # e-print served a PDF directly
+                pdf_path = dest_dir / f"{_safe_name(arxiv_id)}.pdf"
+                pdf_path.write_bytes(r.content)
+                return SourceBundle(
+                    kind="pdf", path=pdf_path, warnings=[PDF_FALLBACK_WARNING]
+                )
         pdf_path = dest_dir / f"{_safe_name(arxiv_id)}.pdf"
         r2 = c.get(f"{PDF_URL}/{arxiv_id}")
         r2.raise_for_status()

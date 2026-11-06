@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.pipeline.extract import Figure
+from backend.pipeline.llm import LLMError
 
 BATCH_SIZE = 5
 FIGURE_CAP = 12
@@ -79,6 +80,6 @@ def describe_figures(
         try:
             raw = client.vision(model, prompt, [f.path for f in batch])
             captions.update(_parse_batch(raw, batch))
-        except (ValueError, KeyError, TypeError) as e:
+        except (ValueError, KeyError, TypeError, OSError, LLMError) as e:
             warnings.append(f"vision batch {i // batch_size} failed ({e}); figures omitted")
     return captions

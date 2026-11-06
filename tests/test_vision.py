@@ -66,3 +66,33 @@ def test_bad_json_skips_batch(tmp_path):
     assert str(figs[5].path) in caps  # good batch is batch 1 -> f5
     assert len(caps) == 1
     assert warnings and "batch 0" in warnings[0]
+
+
+def test_llm_error_skips_batch(tmp_path):
+    figs = _figs(7, tmp=tmp_path)  # batches of 5+2 -> two batches
+    payload = json.dumps(
+        [{"index": 0, "summary": "s", "axes": "", "takeaway": "", "jargon": []}]
+    )
+    c = FakeClient([payload])
+
+    class Boom:
+        def vision(self, model, prompt, images):
+            from backend.pipeline.llm import LLMError
+
+            raise LLMError("502 upstream")
+
+    # first batch errors at the HTTP layer, second succeeds
+    flaky = FlakyVision([Boom(), c])
+    warnings: list[str] = []
+    caps = describe_figures(flaky, "vm", figs, warnings=warnings)
+    assert len(caps) == 1
+    assert warnings and "batch 0" in warnings[0]
+
+
+class FlakyVision:
+    def __init__(self, clients):
+        self.clients = list(clients)
+
+    def vision(self, model, prompt, images):
+        client = self.clients.pop(0)
+        return client.vision(model, prompt, images)

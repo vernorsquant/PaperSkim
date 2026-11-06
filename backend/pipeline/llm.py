@@ -15,6 +15,15 @@ class LLMError(RuntimeError):
     pass
 
 
+_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
 class OpenRouterClient:
     def __init__(
         self,
@@ -68,11 +77,14 @@ class OpenRouterClient:
     def vision(self, model: str, prompt: str, images: list[Path]) -> str:
         content: list[dict] = [{"type": "text", "text": prompt}]
         for img in images:
+            mime = _MIME_BY_SUFFIX.get(img.suffix.lower())
+            if mime is None:
+                continue  # pdf/eps figures cannot be inlined as images
             b64 = base64.b64encode(img.read_bytes()).decode()
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
                 }
             )
         return self.chat(model, [{"role": "user", "content": content}])

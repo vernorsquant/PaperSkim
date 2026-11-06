@@ -11,6 +11,8 @@ from backend.app.settings import Settings
 from backend.pipeline.extract import extract_paper
 from backend.pipeline.fetch import fetch_source, normalize_arxiv_id
 from backend.pipeline.vision import describe_figures, select_figures
+from dataclasses import replace
+
 from backend.pipeline.writer import write_and_refine
 
 
@@ -49,21 +51,22 @@ def run_job(
         warnings = list(bundle.warnings) + list(paper.warnings)
 
         _record_stage(conn, job_id, "vision")
-        figures = select_figures(paper.figures)
+        selected = select_figures(paper.figures)
         captions = (
-            describe_figures(client, job["vision_model"], figures, warnings=warnings)
-            if figures
+            describe_figures(client, job["vision_model"], selected, warnings=warnings)
+            if selected
             else {}
         )
         if warnings:
             update_job(conn, job_id, warnings=warnings)
 
         _record_stage(conn, job_id, "draft")
+        active_paper = replace(paper, figures=selected)
         result = write_and_refine(
             client,
             job["writer_model"],
             job["writer_model"],
-            paper,
+            active_paper,
             captions,
             job["target_pages"],
             workdir,
@@ -72,12 +75,16 @@ def run_job(
         captions_path = workdir / "captions.json"
         captions_path.write_text(json.dumps(captions, indent=1))
 
-        status = "done" if result.passed else "done"
+        if not result.passed:
+            warnings.append(
+                f"reviewer did not pass after {result.rounds} rounds; output is best-effort"
+            )
         update_job(
             conn,
             job_id,
-            status=status,
+            status="done",
             stage="done",
+            warnings=warnings,
             pdf_path=str(result.pdf_path) if result.pdf_path else None,
             tex_path=str(result.tex_path),
             captions_path=str(captions_path),

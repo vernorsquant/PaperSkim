@@ -14,17 +14,44 @@ from backend.pipeline.fetch import SourceBundle
 _IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".pdf", ".eps"]
 
 _INPUT_RE = re.compile(r"\\(?:input|include)\{([^}]+)\}")
-_TITLE_RE = re.compile(r"\\title\s*\{([^{}]*)\}")
-_SECTION_RE = re.compile(r"\\section\*?\{([^}]*)\}")
+_TITLE_RE = re.compile(r"\\title\s*")
+_SECTION_RE = re.compile(r"\\section\*?\s*")
 _FIGURE_ENV_RE = re.compile(
     r"\\begin\{figure\*?\}.*?\\end\{figure\*?\}", re.DOTALL
 )
 _INCLUDEGRAPHICS_RE = re.compile(
     r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}"
 )
-_CAPTION_RE = re.compile(r"\\caption\s*\{(.+?)\}", re.DOTALL)
+_CAPTION_RE = re.compile(r"\\caption\s*")
 _COMMENT_RE = re.compile(r"(?<!\\)%.*")
 _MAX_INPUT_DEPTH = 16
+
+
+def _group_span(text: str, match: re.Match) -> tuple[str, int] | None:
+    """Return (content, end_index) of the brace-balanced group after a command match."""
+    brace = text.find("{", match.end() - 1)
+    if brace == -1:
+        return None
+    depth = 0
+    i = brace
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace + 1 : i], i + 1
+        i += 1
+    return None
+
+
+def _group_after(text: str, match: re.Match) -> str | None:
+    span = _group_span(text, match)
+    return span[0] if span else None
 
 
 @dataclass
@@ -56,14 +83,24 @@ def _find_main_tex(root: Path) -> Path:
     return min(candidates, key=lambda p: (len(p.parts), p.name != "main.tex"))
 
 
+def _inside_root(root: Path, cand: Path) -> bool:
+    try:
+        cand.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _resolve_input(root: Path, target: str, visited: set[Path]) -> Path | None:
     name = target.strip()
+    if name.startswith("/") or ".." in Path(name).parts:
+        return None
     for cand in (
         root / name,
         root / f"{name}.tex",
     ):
         cand = cand.resolve()
-        if cand.is_file() and cand not in visited:
+        if cand.is_file() and cand not in visited and _inside_root(root.resolve(), cand):
             return cand
     return None
 
@@ -84,12 +121,18 @@ def _flatten(text: str, root: Path, visited: set[Path], depth: int = 0) -> str:
 
 
 def _resolve_figure(root: Path, graphics: str) -> Path | None:
-    p = root / graphics.strip()
+    name = graphics.strip()
+    if not name or Path(name).is_absolute():
+        return None
+    p = (root / name).resolve()
+    if not _inside_root(root.resolve(), p):
+        return None
     if p.is_file():
         return p
     for ext in _IMAGE_EXTS:
-        if p.with_suffix(ext).is_file():
-            return p.with_suffix(ext)
+        cand = p.with_suffix(ext)
+        if cand.is_file():
+            return cand
     return None
 
 
@@ -106,7 +149,7 @@ def _extract_figures(root: Path, text: str) -> list[Figure]:
     for env_m in _FIGURE_ENV_RE.finditer(text):
         env = env_m.group(0)
         cap_m = _CAPTION_RE.search(env)
-        caption = cap_m.group(1).strip() if cap_m else None
+        caption = _group_after(env, cap_m) if cap_m else None
         if caption:
             caption = _strip_comments(caption).strip()
         for g_m in _INCLUDEGRAPHICS_RE.finditer(env):
@@ -123,8 +166,11 @@ def _extract_sections(text: str) -> list[tuple[str, str]]:
     matches = list(_SECTION_RE.finditer(text))
     sections: list[tuple[str, str]] = []
     for i, m in enumerate(matches):
+        span = _group_span(text, m)
+        body_start = span[1] if span else m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        sections.append((m.group(1).strip(), text[m.end():end].strip()))
+        name = span[0] if span else "?"
+        sections.append((name.strip(), text[body_start:end].strip()))
     return sections
 
 
@@ -133,16 +179,23 @@ def _extract_latex(bundle: SourceBundle, arxiv_id: str, workdir: Path) -> Paper:
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
-    with tarfile.open(bundle.path) as tar:
-        tar.extractall(root, filter="data")
-    main = _find_main_tex(root)
+    tar_ok = tarfile.is_tarfile(bundle.path)
+    if tar_ok:
+        with tarfile.open(bundle.path) as tar:
+            tar.extractall(root, filter="data")
+        main = _find_main_tex(root)
+    else:
+        # single-file source (bare .tex from arXiv)
+        main = root / "main.tex"
+        shutil.copy2(bundle.path, main)
     visited = {main.resolve()}
     text = _flatten(main.read_text(errors="ignore"), root, visited)
     text = _strip_comments(text)
     title_m = _TITLE_RE.search(text)
+    title = _group_after(text, title_m) if title_m else None
     return Paper(
         arxiv_id=arxiv_id,
-        title=title_m.group(1).strip() if title_m else arxiv_id,
+        title=title.strip() if title else arxiv_id,
         full_text=text,
         sections=_extract_sections(text),
         figures=_extract_figures(root, text),
