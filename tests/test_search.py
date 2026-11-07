@@ -5,7 +5,7 @@ import respx
 from backend.pipeline import search
 from backend.pipeline.search import SearchResult, search_papers
 
-ARXIV_URL = "http://export.arxiv.org/api/query"
+ARXIV_URL = "https://export.arxiv.org/api/query"
 S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 
 
@@ -104,6 +104,21 @@ def test_arxiv_failure_alone_still_returns_s2():
     )
     out = search_papers("query", client=httpx.Client())
     assert len(out) == 1 and out[0].origin == "semantic-scholar"
+
+
+@respx.mock
+def test_default_client_follows_arxiv_redirect():
+    # regression: arXiv served over http 301s to https; the default client
+    # (no explicit client passed, e.g. via /api/search) must follow it.
+    respx.get("http://export.arxiv.org/api/query").respond(
+        301, headers={"Location": "https://export.arxiv.org/api/query"}
+    )
+    respx.get(ARXIV_URL).respond(
+        200, content=_atom([_atom_entry("2401.12345", "Redirect Survivor")])
+    )
+    respx.get(S2_URL).respond(429)
+    out = search_papers("redirect")
+    assert len(out) == 1 and out[0].origin == "arxiv"
 
 
 def test_short_query_rejected():

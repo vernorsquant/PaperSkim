@@ -187,7 +187,7 @@ def test_search_endpoint(client):
         "<author><name>Ada</name></author></entry></feed>"
     ).encode()
     with respx.mock:
-        respx.get("http://export.arxiv.org/api/query").respond(200, content=atom)
+        respx.get("https://export.arxiv.org/api/query").respond(200, content=atom)
         respx.get("https://api.semanticscholar.org/graph/v1/paper/search").respond(
             200, json={"data": []}
         )
