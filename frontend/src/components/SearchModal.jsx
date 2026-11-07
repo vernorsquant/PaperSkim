@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { searchPapers } from "../api.js";
 
 export default function SearchModal({ onClose, onPick }) {
@@ -6,6 +6,14 @@ export default function SearchModal({ onClose, onPick }) {
   const [results, setResults] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const run = async (e) => {
     e.preventDefault();
@@ -25,12 +33,18 @@ export default function SearchModal({ onClose, onPick }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-2xl rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search papers"
+        className="w-full max-w-2xl rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-4"
+      >
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Search papers</h2>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close search"
             className="text-slate-500 hover:text-slate-300"
           >
             ✕
@@ -44,6 +58,7 @@ export default function SearchModal({ onClose, onPick }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="e.g. attention is all you need"
+            aria-label="Search query"
             autoFocus
             className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-indigo-500 focus:outline-none"
           />

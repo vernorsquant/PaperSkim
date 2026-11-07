@@ -3,11 +3,15 @@ import { getJob, pdfUrl, latexUrl, sourcePdfUrl } from "../api.js";
 
 export default function JobDetail({ id }) {
   const [job, setJob] = useState(null);
-  const [captions, setCaptions] = useState(null);
-  const [showCaptions, setShowCaptions] = useState(false);
 
   useEffect(() => {
-    const load = () => getJob(id).then(setJob).catch(() => {});
+    const load = () =>
+      getJob(id)
+        .then((j) => {
+          setJob(j);
+          if (j.status === "done" || j.status === "failed") clearInterval(t);
+        })
+        .catch(() => {});
     load();
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
@@ -83,17 +87,13 @@ export default function JobDetail({ id }) {
         />
       ) : (
         <div className="flex items-center gap-2 py-8 justify-center">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" />
+          {job.status !== "failed" && (
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" />
+          )}
           <span className="text-sm text-slate-400">
             {job.status === "failed" ? "Failed" : `Working — stage: ${job.stage || "queued"}`}
           </span>
         </div>
-      )}
-
-      {showCaptions && captions && (
-        <pre className="text-xs text-slate-400 overflow-auto max-h-64">
-          {JSON.stringify(captions, null, 2)}
-        </pre>
       )}
     </section>
   );

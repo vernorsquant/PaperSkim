@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { saveKey } from "../api.js";
 
 export default function SettingsModal({ onClose, onSaved }) {
@@ -6,6 +6,14 @@ export default function SettingsModal({ onClose, onSaved }) {
   const [error, setError] = useState("");
   const [status, setStatus] = useState(null); // {key_status, message}
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, busy]);
 
   const save = async (e) => {
     e.preventDefault();
@@ -28,6 +36,9 @@ export default function SettingsModal({ onClose, onSaved }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
       <form
         onSubmit={save}
+        role="dialog"
+        aria-modal="true"
+        aria-label="OpenRouter API key settings"
         className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-4"
       >
         <h2 className="text-lg font-semibold text-white">OpenRouter API key</h2>
@@ -49,6 +60,7 @@ export default function SettingsModal({ onClose, onSaved }) {
           value={key}
           onChange={(e) => setKey(e.target.value)}
           placeholder="sk-or-v1-…"
+          aria-label="OpenRouter API key"
           autoFocus
           className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-200 placeholder-slate-600 focus:border-indigo-500 focus:outline-none"
         />

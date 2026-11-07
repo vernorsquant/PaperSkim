@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import ModelDropdown from "./ModelDropdown.jsx";
 import { submitJob, uploadJob } from "../api.js";
 
@@ -21,6 +21,9 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
   const [busy, setBusy] = useState(false);
   const [pdfFile, setPdfFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const linksId = useId();
+  const pagesLabelId = useId();
+  const fileInputId = useId();
 
   useEffect(() => {
     if (prefill) {
@@ -88,7 +91,7 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
     >
       <div>
         <div className="flex items-center justify-between mb-1">
-          <label className="block text-xs font-medium text-slate-400">
+          <label htmlFor={linksId} className="block text-xs font-medium text-slate-400">
             Paper links — arXiv, DOI, bioRxiv, Semantic Scholar, OpenReview, ACL, or
             direct PDF URL (one per line for batch)
           </label>
@@ -101,6 +104,7 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
           </button>
         </div>
         <textarea
+          id={linksId}
           value={input}
           onChange={(e) => {
             setInput(e.target.value);
@@ -131,6 +135,7 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
             <button
               type="button"
               onClick={() => setPdfFile(null)}
+              aria-label={`Remove ${pdfFile.name}`}
               className="text-red-400 hover:underline ml-1"
             >
               remove
@@ -139,9 +144,13 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
         ) : (
           <>
             …or drop a PDF here —{" "}
-            <label className="text-indigo-400 hover:underline cursor-pointer">
+            <label
+              htmlFor={fileInputId}
+              className="text-indigo-400 hover:underline cursor-pointer"
+            >
               browse
               <input
+                id={fileInputId}
                 type="file"
                 accept=".pdf"
                 className="hidden"
@@ -174,14 +183,22 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
       </div>
 
       <div className="flex items-end justify-between">
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
+        <div
+          role="group"
+          aria-labelledby={pagesLabelId}
+          aria-label={`Target pages: ${pages}`}
+        >
+          <label
+            id={pagesLabelId}
+            className="block text-xs font-medium text-slate-400 mb-1"
+          >
             Target pages
           </label>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setPages(Math.max(1, pages - 1))}
+              aria-label="Decrease target pages"
               className="h-9 w-9 rounded-lg border border-slate-700 bg-slate-900 text-lg hover:bg-slate-800"
             >
               −
@@ -192,6 +209,7 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
             <button
               type="button"
               onClick={() => setPages(Math.min(30, pages + 1))}
+              aria-label="Increase target pages"
               className="h-9 w-9 rounded-lg border border-slate-700 bg-slate-900 text-lg hover:bg-slate-800"
             >
               +
