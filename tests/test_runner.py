@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 
@@ -32,6 +33,7 @@ def patch_happy(monkeypatch, tmp_path, n_figures=1, refine_passed=True):
     from backend.pipeline.compiler import CompileResult
     from backend.pipeline.extract import Figure, Paper
     from backend.pipeline.fetch import SourceBundle
+    from backend.pipeline.vision import Caption
     from backend.pipeline.writer import IterationResult
 
     tex = tmp_path / "paper.tex"
@@ -59,7 +61,12 @@ def patch_happy(monkeypatch, tmp_path, n_figures=1, refine_passed=True):
         lambda figures, cap=12: figures[:cap],
     )
     monkeypatch.setattr(
-        runner, "describe_figures", lambda client, model, figures, **k: {}
+        runner,
+        "describe_figures",
+        lambda client, model, figures, **k: {
+            str(f.path): Caption("summary", "axes", "takeaway", ["jargon"])
+            for f in figures
+        },
     )
 
     seen = {}
@@ -88,6 +95,14 @@ def test_run_job_happy_path(tmp_path, monkeypatch):
     assert job["stages"] == ["fetch", "extract", "vision", "draft", "review", "done"]
     assert job["tex_path"] and job["pdf_path"]
     assert job["rounds"] == 1
+    # regression: Caption dataclasses must serialize to captions.json
+    saved = json.loads(Path(job["captions_path"]).read_text())
+    assert list(saved.values())[0] == {
+        "summary": "summary",
+        "axes": "axes",
+        "takeaway": "takeaway",
+        "jargon": ["jargon"],
+    }
 
 
 def test_run_job_caps_figures_passed_to_writer(tmp_path, monkeypatch):
@@ -150,3 +165,42 @@ def test_submit_runs_job(tmp_path, monkeypatch):
     while not calls and time.time() < deadline:
         time.sleep(0.05)
     assert calls == [jid]
+
+
+def test_queue_keeps_draining_after_worker_crash(tmp_path, monkeypatch):
+    """A worker exception (outside run_job's own boundary) must not stall the queue."""
+    conn = init_db(tmp_path / "db.sqlite")
+    calls = []
+
+    def fake_run(job_id, settings, conn, client=None):
+        calls.append(job_id)
+        if job_id == 1:
+            raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(runner, "run_job", fake_run)
+    s = make_settings(tmp_path)
+    q = JobQueue(s, tmp_path / "db.sqlite")
+    j1 = create_job(conn, "x", "1", 4, "w", "v")
+    j2 = create_job(conn, "y", "2", 4, "w", "v")
+    q.submit(j1)
+    q.submit(j2)
+    q.start()
+    deadline = time.time() + 5
+    while len(calls) < 2 and time.time() < deadline:
+        time.sleep(0.05)
+    assert calls == [j1, j2]
+
+
+def test_start_is_idempotent_under_concurrency(tmp_path, monkeypatch):
+    """Two threads calling start() must yield a single executor."""
+    s = make_settings(tmp_path)
+    q = JobQueue(s, tmp_path / "db.sqlite")
+    import threading
+
+    threads = [threading.Thread(target=q.start) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert q._executor is not None
+    q._executor.shutdown(wait=True)

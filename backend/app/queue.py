@@ -27,9 +27,10 @@ class JobQueue:
         return position
 
     def start(self) -> None:
-        if self._executor is not None:
-            return
-        self._executor = ThreadPoolExecutor(max_workers=1)
+        with self._lock:
+            if self._executor is not None:
+                return
+            self._executor = ThreadPoolExecutor(max_workers=1)
         self._drain()
 
     def _drain(self) -> None:
@@ -49,7 +50,11 @@ class JobQueue:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
-            run_job(job_id, self.settings, conn)
+            try:
+                run_job(job_id, self.settings, conn)
+            finally:
+                conn.close()
         finally:
-            conn.close()
-        self._drain()
+            # run_job swallows job-level errors, but a crash here (e.g. DB
+            # failure) must never leave later jobs unprocessed.
+            self._drain()

@@ -86,12 +86,21 @@ def run_job(
             on_stage=lambda s: _record_stage(conn, job_id, s),
         )
         captions_path = workdir / "captions.json"
-        captions_path.write_text(json.dumps(captions, indent=1))
+        captions_path.write_text(
+            json.dumps(
+                {
+                    p: c.to_dict() if hasattr(c, "to_dict") else c
+                    for p, c in captions.items()
+                },
+                indent=1,
+            )
+        )
 
         if not result.passed:
             warnings.append(
                 f"reviewer did not pass after {result.rounds} rounds; output is best-effort"
             )
+        warnings.extend(result.notes)
         fields = dict(
             status="done",
             stage="done",
