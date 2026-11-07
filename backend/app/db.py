@@ -129,6 +129,26 @@ def get_job(conn: sqlite3.Connection, job_id: int) -> dict | None:
     return _serialize(row) if row else None
 
 
+def fail_orphaned_jobs(conn: sqlite3.Connection) -> int:
+    """Mark jobs left queued/running by a previous process as failed.
+
+    The queue lives in memory, so anything still queued/running at startup can
+    never resume; leaving it would poll forever.
+    """
+    rows = conn.execute(
+        "SELECT id FROM jobs WHERE status IN ('queued', 'running')"
+    ).fetchall()
+    for row in rows:
+        update_job(
+            conn,
+            row["id"],
+            status="failed",
+            stage="failed",
+            error="interrupted by server restart — submit again",
+        )
+    return len(rows)
+
+
 def list_jobs(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
     return [_serialize(r) for r in rows]

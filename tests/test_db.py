@@ -78,3 +78,22 @@ def test_new_schema_has_v2_columns(tmp_path):
     conn = init_db(tmp_path / "fresh.db")
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
     assert {"source_kind", "title", "source_pdf_path", "cost_usd"} <= cols
+
+
+def test_fail_orphaned_jobs(conn):
+    from backend.app.db import fail_orphaned_jobs
+
+    running = create_job(conn, "x", "1", 4, "w", "v")
+    queued = create_job(conn, "y", "2", 4, "w", "v")
+    done = create_job(conn, "z", "3", 4, "w", "v")
+    update_job(conn, running, status="running", stage="fetch")
+    update_job(conn, done, status="done")
+
+    n = fail_orphaned_jobs(conn)
+
+    assert n == 2
+    r = get_job(conn, running)
+    assert r["status"] == "failed" and "restart" in r["error"].lower()
+    q = get_job(conn, queued)
+    assert q["status"] == "failed" and "restart" in q["error"].lower()
+    assert get_job(conn, done)["status"] == "done"

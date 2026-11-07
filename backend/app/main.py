@@ -11,7 +11,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from backend.app.db import create_job, get_job, init_db, list_jobs, update_job
+from backend.app.db import (
+    create_job,
+    fail_orphaned_jobs,
+    get_job,
+    init_db,
+    list_jobs,
+    update_job,
+)
 from backend.app.queue import JobQueue
 from backend.app.settings import (
     DEFAULT_CONFIG_PATH,
@@ -60,6 +67,7 @@ def create_app(
         data_dir=Path(data_dir),
     )
     conn = init_db(db_path)
+    fail_orphaned_jobs(conn)
     queue = JobQueue(settings, db_path)
 
     app = FastAPI(title="PaperSkim")
@@ -200,7 +208,7 @@ def create_app(
     def models(kind: str = "writer"):
         try:
             infos = pareto.fetch_models(app.state.settings.api_key)
-        except (httpx.HTTPError, httpx.InvalidURL) as e:
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, KeyError, TypeError) as e:
             raise HTTPException(502, f"OpenRouter model list failed: {e}")
         ranked = pareto.rank_models(infos)
         if kind == "vision":

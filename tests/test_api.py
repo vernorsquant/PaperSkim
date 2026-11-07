@@ -100,6 +100,16 @@ def test_models_502_on_openrouter_failure(client, monkeypatch):
     assert r.status_code == 502
 
 
+def test_models_502_on_malformed_payload(client, monkeypatch):
+    monkeypatch.setattr(pareto, "_CACHE", None)
+    import respx
+
+    with respx.mock:
+        respx.get(MODELS_URL).respond(200, content=b"<html>not json</html>")
+        r = client.get("/api/models?kind=writer")
+    assert r.status_code == 502
+
+
 def test_settings_mask_roundtrip(client):
     r0 = client.get("/api/settings").json()
     assert r0["has_key"] is True  # env-provided key
@@ -235,6 +245,28 @@ def test_source_pdf_served(app, client, tmp_path):
     assert resp.status_code == 200
     assert resp.content == b"%PDF-1.4 original"
     assert client.get("/api/jobs/999/source-pdf").status_code == 404
+
+
+def test_startup_fails_orphaned_jobs(tmp_path):
+    from backend.app.db import create_job, get_job, init_db, update_job
+    from backend.app.main import create_app
+
+    db = tmp_path / "db.sqlite"
+    # build a real schema db, then leave a job 'running' as if a prior process died
+    conn2 = init_db(db)
+    jid = create_job(conn2, "x", "2401.12345", 4, "w", "v")
+    update_job(conn2, jid, status="running", stage="vision")
+    conn2.close()
+
+    app = create_app(
+        db_path=db,
+        data_dir=tmp_path / "data",
+        config_path=tmp_path / "paperskim.toml",
+        start_queue=False,
+    )
+    job = get_job(app.state.db, jid)
+    assert job["status"] == "failed"
+    assert "restart" in job["error"].lower()
 
 
 def test_health_endpoint(client):
