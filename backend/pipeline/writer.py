@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.pipeline.extract import Paper
+from backend.pipeline.compiler import CompileResult
 from backend.pipeline.reviewer import review
 
 PROMPT_BUDGET_CHARS = 90000
@@ -19,8 +20,9 @@ self-contained LaTeX article that a smart undergraduate can understand.
 Rules:
 - Keep the paper's actual story and results; NEVER invent claims, numbers, or citations.
 - Explain rare jargon at first use (short parenthetical gloss); everyday language elsewhere.
-- Use ONLY a complete, compilable preamble (article class, graphicx, amsmath, hyperref,
-  geometry margins=1in). No custom .sty files, no bibliography environment.
+- Use ONLY a complete, compilable preamble (article class, graphicx, amsmath, amssymb,
+  hyperref, geometry margins=1in). No custom .sty files, no bibliography environment.
+- No markdown syntax anywhere (use \\textbf, not **).
 - Embed figures with \\includegraphics using exactly the FIGURE PATHS given; pair each
   with a caption informed by its description.
 - Length: the compiled PDF must be about {target_pages} pages.
@@ -130,6 +132,27 @@ def _sanitize_tex(tex: str, allowed_figs: list[str]) -> str:
     return _INCLUDEGRAPHICS_TEX_RE.sub(repl, tex)
 
 
+# \mathbb / \mathfrak are defined by amssymb, not amsmath; models routinely
+# write them anyway and the mandated preamble historically lacked the package.
+_NEEDS_AMSSYM_RE = re.compile(r"\\(?:mathbb|mathfrak)\b")
+
+
+def _ensure_amssymb(tex: str) -> str:
+    if not _NEEDS_AMSSYM_RE.search(tex) or "amssymb" in tex:
+        return tex
+    lines = tex.splitlines(keepends=True)
+    idx = None
+    for i, line in enumerate(lines):
+        if line.startswith("\\usepackage"):
+            idx = i
+        elif idx is None and line.startswith("\\documentclass"):
+            idx = i
+    if idx is None:
+        return "\\usepackage{amssymb}\n" + tex
+    lines.insert(idx + 1, "\\usepackage{amssymb}\n")
+    return "".join(lines)
+
+
 @dataclass
 class IterationResult:
     tex_path: Path
@@ -137,6 +160,9 @@ class IterationResult:
     pages: int
     rounds: int
     passed: bool
+    # human-readable explanations of degraded output (compile fallbacks etc.);
+    # the runner copies these into the job's warnings.
+    notes: list[str] = field(default_factory=list)
 
 
 def _page_adjustment(pages: int, target: int) -> str | None:
@@ -154,7 +180,7 @@ def _page_adjustment(pages: int, target: int) -> str | None:
 
 
 def _write_tex(tex: str, fig_map: dict[str, str], tex_path: Path) -> None:
-    tex_path.write_text(_sanitize_tex(tex, list(fig_map.values())))
+    tex_path.write_text(_ensure_amssymb(_sanitize_tex(tex, list(fig_map.values()))))
 
 
 def write_and_refine(
@@ -176,6 +202,12 @@ def write_and_refine(
     workdir.mkdir(parents=True, exist_ok=True)
     tex_path = workdir / "paper.tex"
     fig_map = copy_figure_assets(paper, workdir)
+
+    notes: list[str] = []
+    # last (tex, compile-result) pair that actually compiled; any later
+    # recompile failure falls back to it so the job always delivers the
+    # newest COMPILABLE revision instead of a "done" with no PDF.
+    good: tuple[str, CompileResult] | None = None
 
     tex = draft_once(client, writer_model, paper, captions, target_pages, fig_map)
     _write_tex(tex, fig_map, tex_path)
@@ -201,24 +233,47 @@ def write_and_refine(
         # single page-budget adjustment
         adjustment = _page_adjustment(res.pages, target_pages)
         if adjustment is not None:
+            good = (tex, res)  # the pre-adjustment draft compiled
             tex = draft_once(
                 client, writer_model, paper, captions, target_pages, fig_map, adjustment
             )
             _write_tex(tex, fig_map, tex_path)
             res = compile_fn(tex_path, workdir)
+            if not res.ok:
+                notes.append(
+                    "length-adjustment revision failed to compile; serving the pre-adjustment draft"
+                )
+                tex, res = good
+                _write_tex(tex, fig_map, tex_path)
+    if res.ok:
+        good = (tex, res)
 
+    rounds_used = 0
     for round_no in range(1, max_rounds + 1):
+        rounds_used = round_no
         if on_stage:
             on_stage("review")
         verdict = review(client, reviewer_model, paper, tex)
         if verdict.passed:
-            return IterationResult(
-                tex_path=tex_path,
-                pdf_path=res.pdf_path if res.ok else None,
-                pages=res.pages if res.ok else 0,
-                rounds=round_no,
-                passed=True,
+            if res.ok:
+                return IterationResult(
+                    tex_path=tex_path,
+                    pdf_path=res.pdf_path,
+                    pages=res.pages,
+                    rounds=round_no,
+                    passed=True,
+                    notes=notes,
+                )
+            # reviewer approved a tex that never compiled — that is not a
+            # deliverable; fall back or report best-effort with no PDF.
+            notes.append(
+                "reviewer-approved revision failed to compile; "
+                "serving the last compilable revision (best-effort)"
             )
+            if good is not None:
+                tex, res = good
+                _write_tex(tex, fig_map, tex_path)
+            break
         critique = "\n".join(f"- {c}" for c in verdict.critique)
         if on_stage and round_no < max_rounds:
             on_stage("revise")
@@ -233,11 +288,26 @@ def write_and_refine(
         )
         _write_tex(tex, fig_map, tex_path)
         res = compile_fn(tex_path, workdir)
+        if res.ok:
+            good = (tex, res)
+            continue
+        # the revised LaTeX doesn't compile; re-reviewing it can't help.
+        if good is not None:
+            notes.append(
+                f"revision after review round {round_no} failed to compile; "
+                "serving the previous compiled revision (best-effort)"
+            )
+            tex, res = good
+            _write_tex(tex, fig_map, tex_path)
+        else:
+            notes.append("revision failed to compile and no earlier compilable revision exists")
+        break
 
     return IterationResult(
         tex_path=tex_path,
         pdf_path=res.pdf_path if res.ok else None,
         pages=res.pages if res.ok else 0,
-        rounds=max_rounds,
+        rounds=rounds_used,
         passed=False,
+        notes=notes,
     )

@@ -138,6 +138,118 @@ def test_review_parses_verdict():
     assert v.critique == ["invented numbers in §2"]
 
 
+def test_revision_compile_failure_serves_previous(tmp_path):
+    """Post-review revision fails to compile -> serve last good revision, best-effort."""
+    from backend.pipeline.compiler import CompileResult
+
+    outcomes = [True, False]  # draft compiles, revision does not
+
+    def fake_compile(tex_path, outdir):
+        ok = outcomes.pop(0)
+        return CompileResult(
+            ok=ok,
+            pdf_path=tex_path.with_suffix(".pdf") if ok else None,
+            log="" if ok else "panic",
+            pages=4 if ok else 0,
+        )
+
+    REJECT = json.dumps({"passed": False, "critique": ["too long"]})
+    client = FakeChat(["TEX_DRAFT", REJECT, "TEX_REVISED"])  # draft, review, revise
+    res = write_and_refine(
+        client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    assert client.replies == []  # all three consumed; no second review after break
+    assert res.passed is False
+    assert res.pdf_path is not None  # the compiled draft is served
+    assert res.pdf_path.name == "paper.pdf"
+    assert "failed to compile" in res.notes[0]
+    assert Path(res.tex_path).read_text() == "TEX_DRAFT"  # disk restored to served tex
+
+
+def test_adjust_compile_failure_reverts_and_still_passes(tmp_path):
+    """Length-adjustment recompile fails -> revert to draft; reviewer then passes it."""
+    from backend.pipeline.compiler import CompileResult
+
+    pages = [8, 0, 8]  # draft 8p (adjust needed), adjust recompile fails, final compile of restored tex
+
+    def fake_compile(tex_path, outdir):
+        p = pages.pop(0)
+        return CompileResult(
+            ok=p > 0,
+            pdf_path=tex_path.with_suffix(".pdf") if p > 0 else None,
+            log="" if p > 0 else "panic",
+            pages=p,
+        )
+
+    PASS = json.dumps({"passed": True, "critique": []})
+    client = FakeChat(["TEX1", "TEX_ADJ", PASS])  # draft, adjust, review-pass
+    res = write_and_refine(
+        client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    assert res.passed is True
+    assert res.pdf_path is not None
+    assert any("pre-adjustment" in n for n in res.notes)
+
+
+def test_never_compiled_and_reviewer_passes_is_not_success(tmp_path):
+    """Reviewer approval of a tex that never compiled must not report a deliverable."""
+    from backend.pipeline.compiler import CompileResult
+
+    def fake_compile(tex_path, outdir):
+        return CompileResult(ok=False, pdf_path=None, log="bad", pages=0)
+
+    PASS = json.dumps({"passed": True, "critique": []})
+    client = FakeChat(["TEX1", "TEX_REPAIR", PASS])  # draft, repair, review-pass
+    res = write_and_refine(
+        client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    assert res.passed is False
+    assert res.pdf_path is None
+    assert "failed to compile" in res.notes[0]
+
+
+def test_amssymb_injected_when_mathbb_used(tmp_path):
+    """\mathbb without amssymb in the preamble is the #1 math-paper compile failure."""
+    tex = (
+        "\\documentclass{article}\n\\usepackage{amsmath}\n"
+        "\\begin{document}$Q \\in \\mathbb{R}$\\end{document}\n"
+    )
+    c = FakeChat([tex, json.dumps({"passed": True, "critique": []})])
+
+    def fake_compile(tex_path, outdir):
+        written = Path(tex_path).read_text()
+        assert written.count("\\usepackage{amssymb}") == 1
+        assert "\\mathbb" in written
+        from backend.pipeline.compiler import CompileResult
+
+        return CompileResult(ok=True, pdf_path=None, log="", pages=3)
+
+    res = write_and_refine(
+        c, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    assert res.passed is True
+
+
+def test_amssymb_not_duplicated(tmp_path):
+    tex = (
+        "\\documentclass{article}\n\\usepackage{amssymb}\n"
+        "\\begin{document}$\\mathfrak{q}$\\end{document}\n"
+    )
+    c = FakeChat([tex, json.dumps({"passed": True, "critique": []})])
+
+    def fake_compile(tex_path, outdir):
+        written = Path(tex_path).read_text()
+        assert written.count("amssymb") == 1
+        from backend.pipeline.compiler import CompileResult
+
+        return CompileResult(ok=True, pdf_path=None, log="", pages=3)
+
+    res = write_and_refine(
+        c, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    assert res.passed is True
+
+
 def test_review_unparsable_is_fail():
     c = FakeChat(["I think it looks fine!"])
     v = review(c, "rm", make_paper(), "DRAFT")
