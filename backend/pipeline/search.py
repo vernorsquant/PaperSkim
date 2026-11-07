@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-ARXIV_SEARCH_URL = "http://export.arxiv.org/api/query"
+ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 S2_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 S2_FIELDS = "title,authors,year,venue,citationCount,externalIds,openAccessPdf"
 
@@ -138,7 +138,7 @@ def search_papers(query: str, limit: int = 10, client: httpx.Client | None = Non
     if len(query) < 2:
         raise ValueError("search query too short")
     own = client is None
-    c = client if client is not None else httpx.Client(timeout=30)
+    c = client if client is not None else httpx.Client(timeout=30, follow_redirects=True)
     errors: list[str] = []
     results: list[SearchResult] = []
     try:
