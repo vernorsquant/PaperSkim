@@ -134,6 +134,16 @@ def test_fetch_pdf_url_rejects_html_paywall(tmp_path):
 
 
 @respx.mock
+def test_fetch_pdf_url_rejects_lowercase_doctype(tmp_path):
+    """Regression: lowercase `<!doctype html>` must be caught like uppercase."""
+    respx.get("https://example.com/paper").respond(
+        200, content=b"<!doctype html><html>login required</html>"
+    )
+    with pytest.raises(ValueError, match="HTML"):
+        fetch_source("pdf_url", "https://example.com/paper", tmp_path, client=httpx.Client())
+
+
+@respx.mock
 def test_fetch_acl_builds_pdf_url(tmp_path):
     respx.get("https://aclanthology.org/D19-1001.pdf").respond(
         200, content=b"%PDF-1.4 acl"

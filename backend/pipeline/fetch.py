@@ -68,7 +68,8 @@ def _download_pdf(
     r = client.get(url)
     r.raise_for_status()
     head = r.content[:1024].lstrip()
-    if head.startswith(b"<!DOCTYPE") or head.startswith(b"<html"):
+    probe = head[:64].lower()
+    if probe.startswith(b"<!doctype") or probe.startswith(b"<html"):
         raise ValueError(
             f"that link served an HTML page, not a PDF (paywall?) — {url}. "
             "Try a direct open-access PDF link instead."
