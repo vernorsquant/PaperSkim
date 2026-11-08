@@ -10,7 +10,7 @@ from pathlib import Path
 
 from backend.pipeline.extract import Paper
 from backend.pipeline.compiler import CompileResult
-from backend.pipeline.reviewer import review
+from backend.pipeline.reviewer import review, verify_accuracy
 
 PROMPT_BUDGET_CHARS = 90000
 PAGE_TOLERANCE = 1
@@ -191,7 +191,7 @@ def write_and_refine(
     captions: dict,
     target_pages: int,
     workdir: Path,
-    max_rounds: int = 3,
+    max_rounds: int = 4,
     compile_fn=None,
     on_stage=None,
 ) -> IterationResult:
@@ -254,8 +254,14 @@ def write_and_refine(
         if on_stage:
             on_stage("review")
         verdict = review(client, reviewer_model, paper, tex)
-        if verdict.passed:
-            if res.ok:
+        passed = verdict.passed and not verdict.missing
+        if passed and res.ok:
+            # post-review fact-check: every number/claim re-checked against the
+            # original before the draft is allowed to ship.
+            if on_stage:
+                on_stage("verify")
+            accuracy = verify_accuracy(client, reviewer_model, paper, tex)
+            if accuracy.accurate:
                 return IterationResult(
                     tex_path=tex_path,
                     pdf_path=res.pdf_path,
@@ -264,6 +270,16 @@ def write_and_refine(
                     passed=True,
                     notes=notes,
                 )
+            critique = "The fact-check found accuracy errors. Fix every one:\n" + (
+                "\n".join(f"- {i}" for i in accuracy.issues)
+                or "- re-verify every number and claim against the original"
+            )
+            if round_no == max_rounds:
+                notes.append(
+                    "fact-check flagged accuracy issues; the final revision "
+                    "applies the fixes but was not re-verified"
+                )
+        elif passed:
             # reviewer approved a tex that never compiled — that is not a
             # deliverable; fall back or report best-effort with no PDF.
             notes.append(
@@ -274,7 +290,13 @@ def write_and_refine(
                 tex, res = good
                 _write_tex(tex, fig_map, tex_path)
             break
-        critique = "\n".join(f"- {c}" for c in verdict.critique)
+        else:
+            lines = [f"- {c}" for c in verdict.critique]
+            lines += [
+                f"- restore this missing content from the original: {m}"
+                for m in verdict.missing
+            ]
+            critique = "The reviewer rejected the draft. Fix every point:\n" + "\n".join(lines)
         if on_stage and round_no < max_rounds:
             on_stage("revise")
         tex = draft_once(
@@ -284,7 +306,7 @@ def write_and_refine(
             captions,
             target_pages,
             fig_map,
-            adjust=f"The reviewer rejected the draft. Fix every point:\n{critique}",
+            adjust=critique,
         )
         _write_tex(tex, fig_map, tex_path)
         res = compile_fn(tex_path, workdir)

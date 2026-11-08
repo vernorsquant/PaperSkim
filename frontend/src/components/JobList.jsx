@@ -6,6 +6,7 @@ const STAGE_COLORS = {
   draft: "bg-indigo-900 text-indigo-300",
   review: "bg-amber-900 text-amber-300",
   revise: "bg-amber-800 text-amber-200",
+  verify: "bg-teal-900 text-teal-300",
   done: "bg-emerald-900 text-emerald-300",
   failed: "bg-red-900 text-red-300",
 };

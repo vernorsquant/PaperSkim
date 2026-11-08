@@ -79,7 +79,8 @@ def test_page_adjust_called_once(tmp_path):
         return CompileResult(ok=True, pdf_path=None, log="", pages=pages.pop(0))
 
     PASS = json.dumps({"passed": True, "critique": []})
-    client = FakeChat(["TEX1", "TEX2", PASS])  # draft, adjust, review-pass
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX1", "TEX2", PASS, ACC])  # draft, adjust, review-pass, verify-pass
     res = write_and_refine(
         client,
         "wm",
@@ -90,7 +91,7 @@ def test_page_adjust_called_once(tmp_path):
         tmp_path,
         compile_fn=fake_compile,
     )
-    assert len(client.replies) == 0  # 3 calls: draft, adjust, review-pass (adjust capped)
+    assert len(client.replies) == 0  # 4 calls: draft, adjust, review-pass, verify-pass
     assert res.rounds == 1
 
 
@@ -101,7 +102,8 @@ def test_refine_stops_on_pass(tmp_path):
         return CompileResult(ok=True, pdf_path=None, log="", pages=4)
 
     PASS = json.dumps({"passed": True, "critique": []})
-    client = FakeChat(["TEX1", PASS])  # draft, review-pass (no adjust: pages match)
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX1", PASS, ACC])  # draft, review-pass, verify-pass
     res = write_and_refine(
         client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
     )
@@ -110,7 +112,7 @@ def test_refine_stops_on_pass(tmp_path):
     assert res.passed is True
 
 
-def test_refine_caps_at_three(tmp_path):
+def test_refine_caps_at_four(tmp_path):
     from backend.pipeline.compiler import CompileResult
 
     def fake_compile(tex_path, outdir):
@@ -120,14 +122,69 @@ def test_refine_caps_at_three(tmp_path):
         return json.dumps({"passed": False, "critique": ["fix %d" % i]})
 
     client = FakeChat(
-        ["T1", fail(0), "T2", fail(1), "T3", fail(2), "T4"]  # interleaved
+        ["T1", fail(0), "T2", fail(1), "T3", fail(2), "T4", fail(3), "T5"]
     )
     res = write_and_refine(
         client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
     )
-    assert res.rounds == 3
+    assert res.rounds == 4
     assert res.passed is False
-    assert len(client.replies) == 0  # all 7 consumed: 4 drafts + 3 reviews
+    assert len(client.replies) == 0  # all 9 consumed: 5 drafts + 4 reviews
+
+
+def test_missing_content_blocks_pass_and_drives_revision(tmp_path):
+    """Coverage gaps ('missing') must force a revision naming the missing items."""
+    from backend.pipeline.compiler import CompileResult
+
+    def fake_compile(tex_path, outdir):
+        return CompileResult(ok=True, pdf_path=None, log="", pages=4)
+
+    GAP = json.dumps(
+        {"passed": True, "critique": [], "missing": ["ablation study results"]}
+    )
+    PASS = json.dumps({"passed": True, "critique": [], "missing": []})
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX1", GAP, "TEX2", PASS, ACC])
+    stages = []
+    res = write_and_refine(
+        client,
+        "wm",
+        "rm",
+        make_paper(tmp_path),
+        {},
+        4,
+        tmp_path,
+        compile_fn=fake_compile,
+        on_stage=stages.append,
+    )
+    assert res.passed is True
+    assert res.rounds == 2
+    # the revision instruction must carry the missing content
+    revise_prompt = client.prompts[2][-1]["content"]
+    assert "restore this missing content" in revise_prompt
+    assert "ablation study results" in revise_prompt
+    assert "review" in stages and "verify" in stages and "revise" in stages
+
+
+def test_accuracy_failure_triggers_fact_check_revision(tmp_path):
+    """Reviewer passes but the fact-check finds errors -> revise, re-review, re-verify."""
+    from backend.pipeline.compiler import CompileResult
+
+    def fake_compile(tex_path, outdir):
+        return CompileResult(ok=True, pdf_path=None, log="", pages=4)
+
+    PASS = json.dumps({"passed": True, "critique": []})
+    BAD_ACC = json.dumps({"accurate": False, "issues": ["Table 2 accuracy is 71%, not 81%"]})
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX1", PASS, BAD_ACC, "TEX2", PASS, ACC])
+    res = write_and_refine(
+        client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    assert res.passed is True
+    assert res.rounds == 2
+    fix_prompt = client.prompts[3][-1]["content"]
+    assert "fact-check found accuracy errors" in fix_prompt
+    assert "71%" in fix_prompt
 
 
 def test_review_parses_verdict():
@@ -136,6 +193,36 @@ def test_review_parses_verdict():
     assert isinstance(v, ReviewVerdict)
     assert v.passed is False
     assert v.critique == ["invented numbers in §2"]
+    assert v.missing == []
+
+
+def test_review_parses_missing_coverage():
+    c = FakeChat([json.dumps({
+        "passed": False,
+        "critique": [],
+        "missing": ["limitations section", "Table 3 timing results"],
+    })])
+    v = review(c, "rm", make_paper(), "DRAFT")
+    assert v.missing == ["limitations section", "Table 3 timing results"]
+
+
+def test_verify_accuracy_parses_issues():
+    from backend.pipeline.reviewer import AccuracyVerdict, verify_accuracy
+
+    c = FakeChat([json.dumps({"accurate": False, "issues": ["p=0.03 not p=0.3"]})])
+    v = verify_accuracy(c, "rm", make_paper(), "DRAFT")
+    assert isinstance(v, AccuracyVerdict)
+    assert v.accurate is False
+    assert v.issues == ["p=0.03 not p=0.3"]
+
+
+def test_verify_accuracy_unparsable_is_not_blocking():
+    from backend.pipeline.reviewer import verify_accuracy
+
+    c = FakeChat(["cannot check right now"])
+    v = verify_accuracy(c, "rm", make_paper(), "DRAFT")
+    assert v.accurate is True
+    assert v.issues == []
 
 
 def test_revision_compile_failure_serves_previous(tmp_path):
@@ -182,7 +269,8 @@ def test_adjust_compile_failure_reverts_and_still_passes(tmp_path):
         )
 
     PASS = json.dumps({"passed": True, "critique": []})
-    client = FakeChat(["TEX1", "TEX_ADJ", PASS])  # draft, adjust, review-pass
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX1", "TEX_ADJ", PASS, ACC])  # draft, adjust, review-pass, verify-pass
     res = write_and_refine(
         client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
     )
@@ -214,7 +302,8 @@ def test_amssymb_injected_when_mathbb_used(tmp_path):
         "\\documentclass{article}\n\\usepackage{amsmath}\n"
         "\\begin{document}$Q \\in \\mathbb{R}$\\end{document}\n"
     )
-    c = FakeChat([tex, json.dumps({"passed": True, "critique": []})])
+    c = FakeChat([tex, json.dumps({"passed": True, "critique": []}),
+                  json.dumps({"accurate": True, "issues": []})])
 
     def fake_compile(tex_path, outdir):
         written = Path(tex_path).read_text()
@@ -235,7 +324,8 @@ def test_amssymb_not_duplicated(tmp_path):
         "\\documentclass{article}\n\\usepackage{amssymb}\n"
         "\\begin{document}$\\mathfrak{q}$\\end{document}\n"
     )
-    c = FakeChat([tex, json.dumps({"passed": True, "critique": []})])
+    c = FakeChat([tex, json.dumps({"passed": True, "critique": []}),
+                  json.dumps({"accurate": True, "issues": []})])
 
     def fake_compile(tex_path, outdir):
         written = Path(tex_path).read_text()
@@ -268,7 +358,8 @@ def test_draft_sanitized_before_write(tmp_path):
         "\\includegraphics{/home/user/secret.png}\n"
         "\\begin{document}x\\end{document}\n"
     )
-    c = FakeChat([evil, json.dumps({"passed": True, "critique": []})])
+    c = FakeChat([evil, json.dumps({"passed": True, "critique": []}),
+                  json.dumps({"accurate": True, "issues": []})])
 
     def fake_compile(tex_path, outdir):
         written = Path(tex_path).read_text()
