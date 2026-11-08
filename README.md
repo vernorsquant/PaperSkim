@@ -32,8 +32,12 @@ figures are limited compared to the arXiv LaTeX path.
 
 ## Run
 
-Windows: double-click `run.bat` (checks Python 3.11+, installs deps, saves your key,
-starts both servers, opens the UI).
+Windows: double-click **`setup.bat`** once — it installs every dependency
+(Python 3.12, uv, backend packages, tectonic, poppler, Node.js LTS, frontend
+packages) via winget with pip fallbacks, then prompts for your OpenRouter key.
+Afterwards, double-click `run.bat` to start both servers and open the UI.
+(If a tool was installed mid-run, open a new terminal window and re-run
+`setup.bat` to let it verify everything.)
 
 macOS / Linux:
 
@@ -52,6 +56,34 @@ Requirements: `tectonic` (LaTeX), poppler (`pdftotext`, `pdfinfo`) on PATH.
 API key: enter via the settings modal — it is verified live against OpenRouter before
 being saved (stored in `backend/paperskim.toml`, chmod 600, never committed), or set
 `OPENROUTER_API_KEY`.
+
+## Queue
+
+- **Two jobs run in parallel** by default so batches finish in roughly half the
+  time. Change it in `backend/paperskim.toml`:
+
+  ```toml
+  [queue]
+  workers = 3   # default 2
+  ```
+
+- **Stop queue** — the ■ button above the job list (or `POST /api/queue/stop`)
+  cancels every queued job that has not started yet; running jobs finish.
+  Cancelled jobs show as failed with "cancelled — the queue was stopped".
+
+## Quality loop
+
+Each job is not a one-shot draft. After the first compilable draft:
+
+1. **Review** — a rubric reviewer compares the draft against the original text:
+   faithfulness, coverage (anything important *missing* from the original is
+   listed and must be restored), jargon glosses, figure captions.
+2. **Fact-check** — after the reviewer passes, a second pass re-verifies every
+   number and claim against the original before the job may ship.
+3. **Revise** — reviewer critiques, missing-coverage items, or fact-check
+   errors are all fed back to the writer; up to 4 rounds
+   (`max_rounds` in `write_and_refine`). The last compilable revision is always
+   what gets delivered, with notes in the job warnings if output is best-effort.
 
 ## Troubleshooting
 
