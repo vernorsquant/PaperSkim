@@ -56,13 +56,19 @@ if not "!KEY!"=="" (
 REM ---------- 4. LaTeX / poppler ----------
 echo.
 echo [2/4] Checking LaTeX and poppler...
+set "TOOLSOK=1"
 where tectonic >nul 2>nul || (
     echo WARNING: tectonic not found - PDFs cannot be compiled without it.
-    echo   Install: winget install Tectonic.Tectonic   ^(or: scoop install tectonic^)
+    echo   Run setup.bat to install it ^(winget install Tectonic.Tectonic^).
+    set "TOOLSOK="
 )
 where pdftotext >nul 2>nul || (
     echo WARNING: poppler tools ^(pdftotext/pdfinfo^) not found - non-arXiv PDF jobs will fail.
-    echo   Install: download poppler for Windows ^(e.g. https://github.com/oschwartz10612/poppler-windows/releases^) and add bin\ to PATH
+    echo   Run setup.bat to install it ^(winget install oschwartz10612.Poppler^).
+    set "TOOLSOK="
+)
+if "%TOOLSOK%"=="" (
+    echo TIP: double-click setup.bat once - it installs every dependency automatically.
 )
 
 REM ---------- 5. frontend dependencies ----------
