@@ -68,7 +68,7 @@ def create_app(
     )
     conn = init_db(db_path)
     fail_orphaned_jobs(conn)
-    queue = JobQueue(settings, db_path)
+    queue = JobQueue(settings, db_path, max_workers=settings.queue_workers)
 
     app = FastAPI(title="PaperSkim")
     app.state.settings = settings
@@ -142,6 +142,12 @@ def create_app(
     @app.get("/api/jobs")
     def all_jobs():
         return list_jobs(conn)
+
+    @app.post("/api/queue/stop")
+    def stop_queue():
+        """Cancel every queued job that has not started; running jobs finish."""
+        cancelled = queue.stop()
+        return {"cancelled": cancelled, "cancelled_count": len(cancelled)}
 
     @app.get("/api/jobs/{job_id}")
     def job_detail(job_id: int):

@@ -204,3 +204,78 @@ def test_start_is_idempotent_under_concurrency(tmp_path, monkeypatch):
         t.join()
     assert q._executor is not None
     q._executor.shutdown(wait=True)
+
+
+def test_two_workers_run_concurrently(tmp_path, monkeypatch):
+    """max_workers=2: two jobs must overlap in time, not run back-to-back."""
+    import threading
+
+    barrier = threading.Barrier(2, timeout=10)
+    lock = threading.Lock()
+    finished = []
+
+    def fake_run(job_id, settings, conn, client=None):
+        # with a single worker this times out; with two it releases both
+        barrier.wait()
+        with lock:
+            finished.append(job_id)
+
+    monkeypatch.setattr(runner, "run_job", fake_run)
+    s = make_settings(tmp_path)
+    q = JobQueue(s, tmp_path / "db.sqlite", max_workers=2)
+    q.start()
+    try:
+        q.submit(1)
+        q.submit(2)
+        deadline = time.time() + 10
+        while len(finished) < 2 and time.time() < deadline:
+            time.sleep(0.05)
+        assert sorted(finished) == [1, 2]
+    finally:
+        q._executor.shutdown(wait=True)
+
+
+def test_stop_cancels_queued_not_running(tmp_path, monkeypatch):
+    """stop() cancels waiting jobs; the job already running must be left alone."""
+    import threading
+
+    from backend.app.db import get_job, update_job
+
+    release = threading.Event()
+
+    def fake_run(job_id, settings, conn, client=None):
+        update_job(conn, job_id, status="running", stage="vision")  # as real run_job does
+        release.wait(10)  # stay "running" until the test releases
+
+    monkeypatch.setattr(runner, "run_job", fake_run)
+    conn = init_db(tmp_path / "db.sqlite")
+    s = make_settings(tmp_path)
+    q = JobQueue(s, tmp_path / "db.sqlite", max_workers=1)
+    j1 = create_job(conn, "x", "1", 4, "w", "v")
+    j2 = create_job(conn, "y", "2", 4, "w", "v")
+    j3 = create_job(conn, "z", "3", 4, "w", "v")
+    q.submit(j1)
+    q.submit(j2)
+    q.submit(j3)
+    q.start()
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline and get_job(conn, j1)["status"] != "running":
+            time.sleep(0.02)
+        cancelled = q.stop()
+        assert cancelled == [j2, j3]
+        assert get_job(conn, j1)["status"] == "running"
+        assert get_job(conn, j2)["status"] == "failed"
+        assert "cancelled" in get_job(conn, j2)["error"].lower()
+        assert get_job(conn, j3)["status"] == "failed"
+    finally:
+        release.set()
+        q._executor.shutdown(wait=True)
+
+
+def test_stop_with_empty_queue(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "run_job", lambda *a, **k: None)
+    conn = init_db(tmp_path / "db.sqlite")
+    s = make_settings(tmp_path)
+    q = JobQueue(s, tmp_path / "db.sqlite")
+    assert q.stop() == []

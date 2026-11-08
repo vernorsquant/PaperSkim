@@ -36,6 +36,7 @@ export const uploadJob = (file, { target_pages, writer_model, vision_model }) =>
 };
 
 export const listJobs = () => req("/api/jobs");
+export const stopQueue = () => req("/api/queue/stop", { method: "POST" });
 export const getJob = (id) => req(`/api/jobs/${id}`);
 export const getModels = (kind) => req(`/api/models?kind=${kind}`);
 export const getSettings = () => req("/api/settings");

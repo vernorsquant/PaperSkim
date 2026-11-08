@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getHealth, getSettings, listJobs } from "./api.js";
+import { getHealth, getSettings, listJobs, stopQueue } from "./api.js";
 import JobForm from "./components/JobForm.jsx";
 import JobList from "./components/JobList.jsx";
 import JobDetail from "./components/JobDetail.jsx";
@@ -16,6 +16,20 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [prefill, setPrefill] = useState("");
+  const [stopping, setStopping] = useState(false);
+
+  const onStopQueue = async () => {
+    if (!window.confirm("Cancel every queued job that hasn't started? Running jobs will finish.")) return;
+    setStopping(true);
+    try {
+      await stopQueue();
+      setJobs(await listJobs());
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setStopping(false);
+    }
+  };
 
   const refreshSettings = () =>
     getSettings()
@@ -101,6 +115,17 @@ export default function App() {
         {error && (
           <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-300">
             {error}
+          </div>
+        )}
+        {jobs.some((j) => j.status === "queued") && (
+          <div className="flex justify-end">
+            <button
+              onClick={onStopQueue}
+              disabled={stopping}
+              className="rounded-lg border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950/60 disabled:opacity-50"
+            >
+              {stopping ? "Stopping…" : "■ Stop queue"}
+            </button>
           </div>
         )}
         <JobList jobs={jobs} onSelect={setSelected} selected={selected} />

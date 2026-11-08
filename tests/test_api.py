@@ -68,6 +68,23 @@ def test_submit_ok_enqueues(client):
     assert r.json()["position"] == 1
 
 
+def test_stop_queue_endpoint(client):
+    r1 = _submit(client)
+    r2 = _submit(client, input="10.1101/2024.01.01.575000")
+    ids = sorted([r1.json()["id"], r2.json()["id"]])
+    r = client.post("/api/queue/stop")
+    assert r.status_code == 200
+    body = r.json()
+    assert sorted(body["cancelled"]) == ids
+    assert body["cancelled_count"] == 2
+    detail = client.get(f"/api/jobs/{ids[0]}").json()
+    assert detail["status"] == "failed"
+    assert "cancelled" in detail["error"].lower()
+    # queue keeps working afterwards
+    r3 = _submit(client)
+    assert r3.status_code == 200
+
+
 def test_get_models_writer_vs_vision(client, monkeypatch):
     monkeypatch.setattr(pareto, "_CACHE", None)
     api_model = lambda id, image: {

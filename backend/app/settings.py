@@ -22,6 +22,8 @@ class Settings:
     api_key: str = ""
     data_dir: Path = DEFAULT_DATA_DIR
     config_path: Path = DEFAULT_CONFIG_PATH
+    # papers condensed in parallel by the job queue
+    queue_workers: int = 2
 
 
 def load_settings(
@@ -29,10 +31,16 @@ def load_settings(
 ) -> Settings:
     cfg = config_path if config_path is not None else DEFAULT_CONFIG_PATH
     api_key = ""
+    queue_workers = 2
     if cfg.is_file():
         with open(cfg, "rb") as f:
             data = tomllib.load(f)
         api_key = str(data.get("openrouter", {}).get("api_key", ""))
+        try:
+            workers = int(data.get("queue", {}).get("workers", 2))
+            queue_workers = workers if workers >= 1 else 2
+        except (TypeError, ValueError):
+            queue_workers = 2
     env_key = os.environ.get(ENV_VAR, "")
     if env_key:
         api_key = env_key
@@ -40,6 +48,7 @@ def load_settings(
         api_key=api_key,
         data_dir=data_dir if data_dir is not None else DEFAULT_DATA_DIR,
         config_path=cfg,
+        queue_workers=queue_workers,
     )
 
 
