@@ -27,6 +27,11 @@ TIER_MAP: dict[str, int] = {
     "qwen/qwen3-max": 3,
     "moonshotai/kimi-k2": 3,
     "z-ai/glm-4": 3,
+    "z-ai/glm-5": 3,
+    # more-specific prefixes override the flagship rules above (longest
+    # prefix wins): the small gpt-5 variants are NOT frontier flagships.
+    "openai/gpt-5-mini": 3,
+    "openai/gpt-5-nano": 2,
     "anthropic/claude-haiku": 2,
     "openai/gpt-4o-mini": 2,
     "google/gemini-2.0-flash": 2,
@@ -143,7 +148,9 @@ def rank_models(
                 context_length=r.context_length,
             )
     frontier = list(families.values())
-    # per-tier cheapest-first ranking (a strict dominance cut collapses to 2-3
-    # models against live pricing; the UI wants the strongest cheap pick per tier)
-    frontier.sort(key=lambda r: (-r.tier, r.prompt_cost, r.id))
+    # most-advanced-first (user mandate 2026-11-08): tier desc, then the
+    # pricier flagship variant first WITHIN a tier — price tracks capability
+    # closely enough inside a tier, and the user wants the dropdown ordered
+    # strongest-at-top, not cheapest-at-top.
+    frontier.sort(key=lambda r: (-r.tier, -r.prompt_cost, r.id))
     return frontier

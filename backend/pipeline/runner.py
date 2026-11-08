@@ -84,6 +84,7 @@ def run_job(
             job["target_pages"],
             workdir,
             on_stage=lambda s: _record_stage(conn, job_id, s),
+            explanation_level=job.get("explanation_level") or "student",
         )
         captions_path = workdir / "captions.json"
         captions_path.write_text(

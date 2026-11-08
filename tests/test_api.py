@@ -68,6 +68,42 @@ def test_submit_ok_enqueues(client):
     assert r.json()["position"] == 1
 
 
+def test_explanation_level_persists_and_defaults(client):
+    # default is "student" when the field is absent
+    r = _submit(client)
+    jid = r.json()["id"]
+    assert client.get(f"/api/jobs/{jid}").json()["explanation_level"] == "student"
+    # an explicit level is stored and echoed back
+    r2 = _submit(client, input="10.1101/2024.01.01.575000", explanation_level="eli5")
+    jid2 = r2.json()["id"]
+    assert client.get(f"/api/jobs/{jid2}").json()["explanation_level"] == "eli5"
+    # unknown levels are rejected by the schema, not silently stored
+    assert _submit(client, explanation_level="shakespeare").status_code == 422
+
+
+def test_explanation_level_reaches_writer_prompt():
+    from backend.pipeline.writer import LEVELS, build_draft_messages
+    from backend.pipeline.extract import Figure, Paper
+    from backend.pipeline.writer import PROMPT_BUDGET_CHARS
+
+    paper = Paper(
+        arxiv_id="2401.12345",
+        title="T",
+        full_text="x" * PROMPT_BUDGET_CHARS,
+        sections=[],
+        figures=[],
+        warnings=[],
+    )
+    out = build_draft_messages(paper, {}, 4, explanation_level="expert")
+    sys = out[0]["content"]
+    assert "AUDIENCE:" in sys
+    assert LEVELS["expert"].splitlines()[0] in sys
+    out2 = build_draft_messages(paper, {}, 4, explanation_level="eli5")
+    assert LEVELS["eli5"].splitlines()[0] in out2[0]["content"]
+    # different levels must produce genuinely different prompts
+    assert sys != out2[0]["content"]
+
+
 def test_stop_queue_endpoint(client):
     r1 = _submit(client)
     r2 = _submit(client, input="10.1101/2024.01.01.575000")

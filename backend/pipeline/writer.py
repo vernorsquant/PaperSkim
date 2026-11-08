@@ -15,8 +15,39 @@ from backend.pipeline.reviewer import review, verify_accuracy
 PROMPT_BUDGET_CHARS = 90000
 PAGE_TOLERANCE = 1
 
+# Explanation levels (user request 2026-11-08): HOW the condensed paper
+# explains itself. Injected into the draft system prompt via {audience};
+# "student" reproduces the previous behavior.
+LEVELS: dict[str, str] = {
+    "eli5": (
+        "Write for a curious 12-year-old. Everyday language only; any jargon "
+        "must be explained immediately with a vivid analogy. Short sentences. "
+        "Focus on the big idea, the story of why it was tried, and why the "
+        "result matters. Avoid formulas unless truly essential - and if one "
+        "appears, explain every symbol in words. It is fine to leave out "
+        "technical subtleties entirely."
+    ),
+    "student": (
+        "Write for a smart undergraduate: intuition first, jargon defined at "
+        "first use (short parenthetical gloss), key results and their meaning "
+        "kept, heavy math simplified but not omitted."
+    ),
+    "grad": (
+        "Write for a grad student or researcher in an ADJACENT field: assume "
+        "comfort with equations and standard methods; explain the paper's "
+        "specific setup, design choices, caveats and how it relates to prior "
+        "work. No hand-holding on basics."
+    ),
+    "expert": (
+        "Write for an active researcher in the paper's own subfield: minimal "
+        "hand-holding, full technical rigor, exact claims and numbers, "
+        "limitations and open problems discussed frankly."
+    ),
+}
+
 _DRAFT_SYSTEM = """You are an expert science writer. Rewrite the paper as a CONDENSED,
-self-contained LaTeX article that a smart undergraduate can understand.
+self-contained LaTeX article with this audience and depth:
+AUDIENCE: {audience}
 Rules:
 - Keep the paper's actual story and results; NEVER invent claims, numbers, or citations.
 - Explain rare jargon at first use (short parenthetical gloss); everyday language elsewhere.
@@ -68,7 +99,9 @@ def build_draft_messages(
     target_pages: int,
     fig_map: dict[str, str] | None = None,
     adjust: str | None = None,
+    explanation_level: str = "student",
 ) -> list[dict]:
+    audience = LEVELS.get(explanation_level, LEVELS["student"])
     fm = fig_map or {str(f.path): f"figures/{f.path.name}" for f in paper.figures}
     cap_json = json.dumps(
         {p: c.to_dict() if hasattr(c, "to_dict") else c for p, c in captions.items()},
@@ -94,7 +127,7 @@ def build_draft_messages(
         user += f"\nREVISION INSTRUCTION (apply fully):\n{adjust}\n"
     user += "\nReturn the complete LaTeX source now."
     return [
-        {"role": "system", "content": _DRAFT_SYSTEM.format(target_pages=target_pages)},
+        {"role": "system", "content": _DRAFT_SYSTEM.format(target_pages=target_pages, audience=audience)},
         {"role": "user", "content": user},
     ]
 
@@ -107,8 +140,11 @@ def draft_once(
     target_pages: int,
     fig_map: dict[str, str] | None = None,
     adjust: str | None = None,
+    explanation_level: str = "student",
 ) -> str:
-    messages = build_draft_messages(paper, captions, target_pages, fig_map, adjust)
+    messages = build_draft_messages(
+        paper, captions, target_pages, fig_map, adjust, explanation_level
+    )
     return _strip_fences(client.chat(model, messages))
 
 
@@ -194,6 +230,7 @@ def write_and_refine(
     max_rounds: int = 4,
     compile_fn=None,
     on_stage=None,
+    explanation_level: str = "student",
 ) -> IterationResult:
     if compile_fn is None:
         from backend.pipeline.compiler import compile_tex
@@ -209,7 +246,8 @@ def write_and_refine(
     # newest COMPILABLE revision instead of a "done" with no PDF.
     good: tuple[str, CompileResult] | None = None
 
-    tex = draft_once(client, writer_model, paper, captions, target_pages, fig_map)
+    tex = draft_once(client, writer_model, paper, captions, target_pages, fig_map,
+                     explanation_level=explanation_level)
     _write_tex(tex, fig_map, tex_path)
     res = compile_fn(tex_path, workdir)
     if on_stage:

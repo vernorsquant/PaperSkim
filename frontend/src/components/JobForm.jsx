@@ -3,6 +3,16 @@ import ModelDropdown from "./ModelDropdown.jsx";
 import { submitJob, uploadJob } from "../api.js";
 
 const MODEL_KEY = "paperskim.models";
+const LEVEL_KEY = "paperskim.level";
+// User default (2026-11-08): their GLM offload model.
+const DEFAULT_WRITER = "z-ai/glm-5.3-flash";
+
+const LEVELS = [
+  { v: "eli5", label: "Explain like I'm 12", hint: "Plain language, analogies, no formulas unless unavoidable" },
+  { v: "student", label: "Undergrad", hint: "Intuition first, jargon defined, key results kept" },
+  { v: "grad", label: "Grad / adjacent researcher", hint: "Technical depth, methods, caveats, related work" },
+  { v: "expert", label: "Domain expert", hint: "Full rigor, exact claims, limitations, open problems" },
+];
 
 function loadSavedModels() {
   try {
@@ -12,12 +22,18 @@ function loadSavedModels() {
   }
 }
 
+function loadSavedLevel() {
+  const v = localStorage.getItem(LEVEL_KEY);
+  return LEVELS.some((l) => l.v === v) ? v : "student";
+}
+
 export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, setPrefill }) {
   const saved = loadSavedModels();
   const [input, setInput] = useState("");
   const [pages, setPages] = useState(4);
-  const [writerModel, setWriterModel] = useState(saved.writer || "");
+  const [writerModel, setWriterModel] = useState(saved.writer || DEFAULT_WRITER);
   const [visionModel, setVisionModel] = useState(saved.vision || "");
+  const [level, setLevelState] = useState(loadSavedLevel);
   const [busy, setBusy] = useState(false);
   const [pdfFile, setPdfFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
@@ -48,6 +64,13 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
     rememberModels(writerModel, m);
   };
 
+  const setLevel = (v) => {
+    setLevelState(v);
+    try {
+      localStorage.setItem(LEVEL_KEY, v);
+    } catch {}
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -58,6 +81,7 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
             target_pages: pages,
             writer_model: writerModel,
             vision_model: visionModel,
+            explanation_level: level,
           })
         );
       } else {
@@ -67,7 +91,7 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
           .filter(Boolean);
         for (const line of lines) {
           const payload = { input: line };
-          await onSubmit(() => submitJob({ ...payload, target_pages: pages, writer_model: writerModel, vision_model: visionModel }));
+          await onSubmit(() => submitJob({ ...payload, target_pages: pages, writer_model: writerModel, vision_model: visionModel, explanation_level: level }));
         }
       }
     } finally {
@@ -180,6 +204,28 @@ export default function JobForm({ onSubmit, disabled, onOpenSearch, prefill, set
           value={visionModel}
           onChange={setVision}
         />
+      </div>
+
+      <div>
+        <label
+          htmlFor="explain-level"
+          className="block text-xs font-medium text-slate-400 mb-1"
+          title="How technical should the explanation be?"
+        >
+          Explain it to me like…
+        </label>
+        <select
+          id="explain-level"
+          value={level}
+          onChange={(e) => setLevel(e.target.value)}
+          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+        >
+          {LEVELS.map((l) => (
+            <option key={l.v} value={l.v}>
+              {l.label} — {l.hint}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="flex items-end justify-between">

@@ -57,11 +57,12 @@ def test_rank_prefers_frontier(monkeypatch):
     ]
     ranked = rank_models(models)
     ids = [r.id for r in ranked]
-    # sorted strongest-tier-first, cheapest-first within tier; pricey tier-3
-    # still listed (below the cheap one) but tier-2 follows after tier-3
-    assert ids == ["test/t3", "test/t3-pricey", "test/t2"]
+    # sorted strongest-tier-first, most-advanced-first WITHIN tier (user
+    # mandate 2026-11-08: the pricier flagship variant leads its tier);
+    # tier-2 follows after tier-3
+    assert ids == ["test/t3-pricey", "test/t3", "test/t2"]
     assert ranked[0].tier == 3
-    assert ranked[0].prompt_cost == 0.000001
+    assert ranked[0].prompt_cost == 0.000002
 
 
 def test_rank_ignores_free_and_negative_costs(monkeypatch):

@@ -5,6 +5,7 @@ import JobList from "./components/JobList.jsx";
 import JobDetail from "./components/JobDetail.jsx";
 import SearchModal from "./components/SearchModal.jsx";
 import SettingsModal from "./components/SettingsModal.jsx";
+import wallpaper from "./assets/waifu-wallpaper.jpg";
 
 export default function App() {
   const [hasKey, setHasKey] = useState(null);
@@ -69,8 +70,17 @@ export default function App() {
   const keyBroken = hasKey && ["expired", "invalid"].includes(keyStatus);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200">
-      <header className="border-b border-slate-800 px-8 py-5 flex items-center justify-between">
+    <div className="relative min-h-screen text-slate-200">
+      {/* waifu wallpaper layer (wallhaven #5g96j3) under a heavy dark veil
+          so the slate UI stays readable */}
+      <div
+        aria-hidden="true"
+        className="fixed inset-0 bg-cover bg-center bg-no-repeat"
+        style={{ backgroundImage: `url(${wallpaper})` }}
+      />
+      <div className="fixed inset-0 bg-slate-950/85" aria-hidden="true" />
+      <div className="relative">
+      <header className="border-b border-slate-800/80 bg-slate-950/40 px-8 py-5 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">
             Paper<span className="text-indigo-400">Skim</span>
@@ -158,6 +168,7 @@ export default function App() {
           }}
         />
       )}
+      </div>
     </div>
   );
 }

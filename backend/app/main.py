@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.app.db import (
     create_job,
@@ -29,6 +29,7 @@ from backend.app.settings import (
     validate_key,
 )
 from backend.pipeline import pareto, search
+from backend.pipeline.writer import LEVELS as writer_LEVELS
 from backend.pipeline.sources import resolve_source
 
 
@@ -37,6 +38,9 @@ class JobRequest(BaseModel):
     target_pages: int
     writer_model: str
     vision_model: str
+    explanation_level: str = Field(
+        "student", pattern="^(eli5|student|grad|expert)$"
+    )
 
 
 class SettingsRequest(BaseModel):
@@ -96,6 +100,7 @@ def create_app(
             req.writer_model,
             req.vision_model,
             source_kind=src.kind,
+            explanation_level=req.explanation_level,
         )
         position = queue.submit(jid)
         if start_queue:
@@ -108,6 +113,7 @@ def create_app(
         target_pages: int = Form(4),
         writer_model: str = Form(...),
         vision_model: str = Form(...),
+        explanation_level: str = Form("student"),
     ):
         if not (1 <= target_pages <= 30):
             raise HTTPException(400, "target_pages must be between 1 and 30")
@@ -133,6 +139,7 @@ def create_app(
             writer_model,
             vision_model,
             source_kind="upload",
+            explanation_level=explanation_level if explanation_level in writer_LEVELS else "student",
         )
         position = queue.submit(jid)
         if start_queue:

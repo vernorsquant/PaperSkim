@@ -34,6 +34,7 @@ _MIGRATION_COLUMNS: dict[str, str] = {
     "title": "TEXT NOT NULL DEFAULT ''",
     "source_pdf_path": "TEXT",
     "cost_usd": "REAL",
+    "explanation_level": "TEXT NOT NULL DEFAULT 'student'",
 }
 
 _ALLOWED_FIELDS = {
@@ -86,11 +87,12 @@ def create_job(
     vision_model: str,
     source_kind: str = "arxiv",
     title: str = "",
+    explanation_level: str = "student",
 ) -> int:
     cur = conn.execute(
         "INSERT INTO jobs (arxiv_input, arxiv_id, target_pages, writer_model,"
-        " vision_model, source_kind, title)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        " vision_model, source_kind, title, explanation_level)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             arxiv_input,
             arxiv_id,
@@ -99,6 +101,7 @@ def create_job(
             vision_model,
             source_kind,
             title,
+            explanation_level,
         ),
     )
     conn.commit()
