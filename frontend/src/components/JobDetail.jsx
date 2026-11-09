@@ -19,6 +19,7 @@ export default function JobDetail({ id }) {
 
   if (!job) return null;
   const done = job.status === "done" && job.pdf_path;
+  const noPdf = job.status === "done" && !job.pdf_path;
   const title = job.title || job.arxiv_id;
 
   return (
@@ -85,6 +86,14 @@ export default function JobDetail({ id }) {
           title="Condensed paper"
           className="h-[70vh] w-full rounded-lg border border-slate-800 bg-white"
         />
+      ) : noPdf ? (
+        <div className="flex items-center gap-2 py-8 justify-center">
+          <span className="text-sm text-yellow-300 max-w-xl text-center">
+            Completed, but no PDF was produced — the writer never produced a
+            LaTeX draft that compiles. The last attempt is saved in the job
+            folder on the server.
+          </span>
+        </div>
       ) : (
         <div className="flex items-center gap-2 py-8 justify-center">
           {job.status !== "failed" && (
