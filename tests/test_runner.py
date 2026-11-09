@@ -29,7 +29,7 @@ def fake_paper(tmp_path):
     )
 
 
-def patch_happy(monkeypatch, tmp_path, n_figures=1, refine_passed=True):
+def patch_happy(monkeypatch, tmp_path, n_figures=1, refine_passed=True, compile_ok=True):
     from backend.pipeline.compiler import CompileResult
     from backend.pipeline.extract import Figure, Paper
     from backend.pipeline.fetch import SourceBundle
@@ -39,7 +39,8 @@ def patch_happy(monkeypatch, tmp_path, n_figures=1, refine_passed=True):
     tex = tmp_path / "paper.tex"
     tex.write_text("\\documentclass{article}x")
     pdf = tmp_path / "paper.pdf"
-    pdf.write_bytes(b"%PDF")
+    if compile_ok:
+        pdf.write_bytes(b"%PDF")
 
     figs = []
     for i in range(n_figures):
@@ -76,7 +77,7 @@ def patch_happy(monkeypatch, tmp_path, n_figures=1, refine_passed=True):
         lambda client, wm, rm, paper, captions, tp, wd, **k: (
             seen.__setitem__("n_figures", len(paper.figures))
             or (k.get("on_stage") or (lambda s: None))("review")
-            or IterationResult(tex, pdf, 3, 1, refine_passed)
+            or IterationResult(tex, pdf if compile_ok else None, 3, 1, refine_passed)
         ),
     )
     return tex, pdf, seen
@@ -129,6 +130,25 @@ def test_run_job_review_failed_still_done_with_warning(tmp_path, monkeypatch):
     job = get_job(conn, jid)
     assert job["status"] == "done"
     assert any("reviewer" in w.lower() for w in job["warnings"])
+
+
+def test_run_job_no_compilable_pdf_marks_failed(tmp_path, monkeypatch):
+    """Nothing ever compiled -> honest 'failed', never 'done' with pdf_path=None.
+
+    A done job without a PDF froze the UI on a 'Working' spinner forever
+    (production: jobs 17/18 on 2026-11-09)."""
+    patch_happy(monkeypatch, tmp_path, compile_ok=False)
+    conn = init_db(tmp_path / "db.sqlite")
+    s = make_settings(tmp_path)
+    jid = create_job(conn, "2401.12345", "2401.12345", 3, "w", "v")
+
+    runner.run_job(jid, s, conn, client=object())
+
+    job = get_job(conn, jid)
+    assert job["status"] == "failed"
+    assert job["pdf_path"] is None
+    assert "compil" in (job["error"] or "").lower()
+    assert job["tex_path"], "last LaTeX attempt must still be recorded"
 
 
 def test_run_job_failure_sets_error(tmp_path, monkeypatch):

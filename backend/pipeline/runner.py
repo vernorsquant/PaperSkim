@@ -103,14 +103,25 @@ def run_job(
             )
         warnings.extend(result.notes)
         fields = dict(
-            status="done",
             stage="done",
             warnings=warnings,
-            pdf_path=str(result.pdf_path) if result.pdf_path else None,
             tex_path=str(result.tex_path),
             captions_path=str(captions_path),
             rounds=result.rounds,
+            pdf_path=str(result.pdf_path) if result.pdf_path else None,
         )
+        if result.pdf_path is None:
+            # Nothing ever compiled — there is no deliverable. Mark failed so
+            # the UI shows an honest error instead of freezing on 'Working'
+            # (a done job with pdf_path=None renders as an eternal spinner).
+            fields["status"] = "failed"
+            fields["error"] = (
+                f"no compilable PDF was produced after {result.rounds} review "
+                "round(s) — the writer never produced a LaTeX draft that compiles; "
+                "the last attempt is saved in the job folder for inspection"
+            )
+        else:
+            fields["status"] = "done"
         cost = getattr(client, "total_cost", None)
         if cost is not None:
             fields["cost_usd"] = round(cost, 6)
