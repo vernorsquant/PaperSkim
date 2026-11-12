@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from backend.pipeline.extract import Figure, Paper
 from backend.pipeline.reviewer import ReviewVerdict, review
 from backend.pipeline.writer import (
@@ -112,8 +114,12 @@ def test_refine_stops_on_pass(tmp_path):
     assert res.passed is True
 
 
-def test_refine_caps_at_four(tmp_path):
+def test_refine_caps_at_two(tmp_path):
+    """Default loop is 2 review rounds max (user request 2026-11-12)."""
+    import inspect
     from backend.pipeline.compiler import CompileResult
+
+    assert inspect.signature(write_and_refine).parameters["max_rounds"].default == 2
 
     def fake_compile(tex_path, outdir):
         return CompileResult(ok=True, pdf_path=None, log="", pages=4)
@@ -121,15 +127,13 @@ def test_refine_caps_at_four(tmp_path):
     def fail(i):
         return json.dumps({"passed": False, "critique": ["fix %d" % i]})
 
-    client = FakeChat(
-        ["T1", fail(0), "T2", fail(1), "T3", fail(2), "T4", fail(3), "T5"]
-    )
+    client = FakeChat(["T1", fail(0), "T2", fail(1), "T3"])
     res = write_and_refine(
         client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
     )
-    assert res.rounds == 4
+    assert res.rounds == 2
     assert res.passed is False
-    assert len(client.replies) == 0  # all 9 consumed: 5 drafts + 4 reviews
+    assert len(client.replies) == 0  # all 5 consumed: 3 writer calls + 2 reviews
 
 
 def test_missing_content_blocks_pass_and_drives_revision(tmp_path):
@@ -279,21 +283,47 @@ def test_adjust_compile_failure_reverts_and_still_passes(tmp_path):
     assert any("pre-adjustment" in n for n in res.notes)
 
 
-def test_never_compiled_and_reviewer_passes_is_not_success(tmp_path):
-    """Reviewer approval of a tex that never compiled must not report a deliverable."""
+def test_never_compiled_raises_after_two_repairs(tmp_path):
+    """Draft + 2 error-fed repairs and still no PDF -> hard CompileFailure."""
     from backend.pipeline.compiler import CompileResult
+    from backend.pipeline.writer import CompileFailure
 
     def fake_compile(tex_path, outdir):
         return CompileResult(ok=False, pdf_path=None, log="bad", pages=0)
 
+    client = FakeChat(["TEX1", "TEX_FIX1", "TEX_FIX2"])  # draft + 2 repairs
+    with pytest.raises(CompileFailure) as exc:
+        write_and_refine(
+            client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path,
+            compile_fn=fake_compile,
+        )
+    assert "compilable LaTeX" in str(exc.value)
+    assert "bad" in str(exc.value)  # last compile error is surfaced
+    assert len(client.replies) == 0
+
+
+def test_compile_repair_feeds_each_new_error(tmp_path):
+    """Each repair attempt must receive the LATEST compile log, not the first."""
+    from backend.pipeline.compiler import CompileResult
+
+    logs = ["bad one", "bad two"]
+
+    def fake_compile(tex_path, outdir):
+        ok = not logs
+        log = logs.pop(0) if logs else ""
+        return CompileResult(
+            ok=ok, pdf_path="p.pdf" if ok else None, log=log, pages=4 if ok else 0
+        )
+
     PASS = json.dumps({"passed": True, "critique": []})
-    client = FakeChat(["TEX1", "TEX_REPAIR", PASS])  # draft, repair, review-pass
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX1", "TEX_FIX1", "TEX_FIX2", PASS, ACC])
     res = write_and_refine(
         client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
     )
-    assert res.passed is False
-    assert res.pdf_path is None
-    assert "failed to compile" in res.notes[0]
+    assert res.passed is True
+    assert "bad one" in client.prompts[1][-1]["content"]  # repair 1 sees error 1
+    assert "bad two" in client.prompts[2][-1]["content"]  # repair 2 sees error 2
 
 
 def test_amssymb_injected_when_mathbb_used(tmp_path):
@@ -375,4 +405,63 @@ def test_draft_sanitized_before_write(tmp_path):
     res = write_and_refine(
         c, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
     )
+    assert res.passed is True
+
+def test_revision_sends_current_tex_and_minimal_edit_rules(tmp_path):
+    """Revisions must be targeted: current tex + fixes in, change-nothing-else rules."""
+    from backend.pipeline.compiler import CompileResult
+
+    def fake_compile(tex_path, outdir):
+        return CompileResult(ok=True, pdf_path=None, log="", pages=4)
+
+    REJECT = json.dumps({"passed": False, "critique": ["too long"]})
+    PASS = json.dumps({"passed": True, "critique": []})
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX_DRAFT", REJECT, "TEX_REVISED", PASS, ACC])
+    write_and_refine(
+        client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    revise_sys = client.prompts[2][0]["content"]
+    revise_user = client.prompts[2][-1]["content"]
+    assert "TARGETED REVISION" in revise_sys
+    assert "VERBATIM" in revise_sys
+    assert "TEX_DRAFT" in revise_user  # current source is revised, not regenerated
+    assert "too long" in revise_user
+
+
+def test_style_rules_in_draft_prompt():
+    """Anti-AI-writing style rules ride in the draft system prompt."""
+    c = FakeChat(["TEX1"])
+    draft_once(c, "m", make_paper(), {}, 4)
+    draft_sys = c.prompts[0][0]["content"]
+    assert "human researcher" in draft_sys
+    assert "delve" in draft_sys  # banned-filler list present
+    assert "groundbreaking" in draft_sys  # significance-inflation ban present
+
+
+def test_compile_repair_is_targeted(tmp_path):
+    """Compile-failure repair must send the failed tex + log, not re-draft from the paper."""
+    from backend.pipeline.compiler import CompileResult
+
+    outcomes = [False, True]
+
+    def fake_compile(tex_path, outdir):
+        ok = outcomes.pop(0)
+        return CompileResult(
+            ok=ok,
+            pdf_path=None,
+            log="panic: undefined control sequence" if not ok else "",
+            pages=0 if not ok else 4,
+        )
+
+    PASS = json.dumps({"passed": True, "critique": []})
+    ACC = json.dumps({"accurate": True, "issues": []})
+    client = FakeChat(["TEX1", "TEX_FIXED", PASS, ACC])
+    res = write_and_refine(
+        client, "wm", "rm", make_paper(tmp_path), {}, 4, tmp_path, compile_fn=fake_compile
+    )
+    repair_user = client.prompts[1][-1]["content"]
+    assert "TEX1" in repair_user  # the failed tex is included
+    assert "failed to compile" in repair_user
+    assert "undefined control sequence" in repair_user
     assert res.passed is True

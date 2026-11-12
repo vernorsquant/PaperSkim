@@ -14,6 +14,13 @@ from backend.pipeline.reviewer import review, verify_accuracy
 
 PROMPT_BUDGET_CHARS = 90000
 PAGE_TOLERANCE = 1
+# Compile-failure self-repair: feed the error log back to the writer this many
+# times (user request 2026-11-12); if nothing compiles after that, fail hard.
+MAX_REPAIR_ATTEMPTS = 2
+
+
+class CompileFailure(RuntimeError):
+    """The writer never produced LaTeX that compiles - no deliverable exists."""
 
 # Explanation levels (user request 2026-11-08): HOW the condensed paper
 # explains itself. Injected into the draft system prompt via {audience};
@@ -57,7 +64,37 @@ Rules:
 - Embed figures with \\includegraphics using exactly the FIGURE PATHS given; pair each
   with a caption informed by its description.
 - Length: the compiled PDF must be about {target_pages} pages.
+{style}
 - Output ONLY the LaTeX source, no markdown fences, no commentary."""
+
+_STYLE_RULES = """Style (write like a human researcher, not a chatbot):
+- Plain, direct sentences. Vary sentence length naturally; never force staccato fragments.
+- No significance inflation: no "groundbreaking", "paradigm shift", "paves the way",
+  "marks a significant step", "poised to". Let the numbers carry the weight.
+- Banned filler: delve, leverage, harness, robust, showcase, underscore, pivotal,
+  comprehensive, "It is worth noting", "In conclusion".
+- Never open a sentence with Moreover, Furthermore, or Additionally.
+- No rule-of-three padding ("clear, concise, and compelling"); no
+  "not only ... but also ..." unless the contrast is real.
+- At most one em dash per 1000 words; prefer commas and parentheses.
+- Keep the paper's own terminology; never swap a term for an elegant synonym.
+- No chatbot throat-clearing ("In this summary, we will explore..."). Just say the thing."""
+
+_REVISE_SYSTEM = """You are an expert science writer performing a TARGETED REVISION.
+You receive: (1) the CURRENT LaTeX source, (2) REQUIRED FIXES from the reviewer or
+fact-checker, and (3) the original paper as reference.
+Rules:
+- Apply ONLY the required fixes. Change NOTHING else: every sentence, equation, figure,
+  section, and the preamble not touched by the fixes stays VERBATIM.
+- Do not rewrite, rephrase, reorder, or "improve" content the fixes do not mention.
+- Restored or corrected content must come from the original paper; NEVER invent
+  claims, numbers, or citations.
+- Keep the document complete and compilable (article class, graphicx, amsmath, amssymb,
+  hyperref, geometry margins=1in). No markdown syntax anywhere.
+- Length: the compiled PDF must stay about {target_pages} pages.
+AUDIENCE: {audience}
+{style}
+- Output ONLY the complete revised LaTeX source, no markdown fences, no commentary."""
 
 
 def truncate(text: str, budget: int = PROMPT_BUDGET_CHARS) -> str:
@@ -98,7 +135,6 @@ def build_draft_messages(
     captions: dict,
     target_pages: int,
     fig_map: dict[str, str] | None = None,
-    adjust: str | None = None,
     explanation_level: str = "student",
 ) -> list[dict]:
     audience = LEVELS.get(explanation_level, LEVELS["student"])
@@ -123,11 +159,14 @@ def build_draft_messages(
         f"FIGURE DESCRIPTIONS (JSON):\n{cap_json}\n\n"
         f"TARGET LENGTH: {target_pages} pages.\n"
     )
-    if adjust:
-        user += f"\nREVISION INSTRUCTION (apply fully):\n{adjust}\n"
     user += "\nReturn the complete LaTeX source now."
     return [
-        {"role": "system", "content": _DRAFT_SYSTEM.format(target_pages=target_pages, audience=audience)},
+        {
+            "role": "system",
+            "content": _DRAFT_SYSTEM.format(
+                target_pages=target_pages, audience=audience, style=_STYLE_RULES
+            ),
+        },
         {"role": "user", "content": user},
     ]
 
@@ -139,14 +178,54 @@ def draft_once(
     captions: dict,
     target_pages: int,
     fig_map: dict[str, str] | None = None,
-    adjust: str | None = None,
     explanation_level: str = "student",
 ) -> str:
     messages = build_draft_messages(
-        paper, captions, target_pages, fig_map, adjust, explanation_level
+        paper, captions, target_pages, fig_map, explanation_level
     )
     return _strip_fences(client.chat(model, messages))
 
+
+def build_revise_messages(
+    paper: Paper,
+    current_tex: str,
+    critique: str,
+    target_pages: int,
+    explanation_level: str = "student",
+) -> list[dict]:
+    audience = LEVELS.get(explanation_level, LEVELS["student"])
+    user = (
+        f"PAPER TITLE: {paper.title}\n\n"
+        f"ORIGINAL PAPER (reference for restored/verified content):\n{truncate(paper.full_text)}\n\n"
+        f"CURRENT LATEX SOURCE (revise this document in place):\n{current_tex}\n\n"
+        f"REQUIRED FIXES (apply exactly these; change nothing else):\n{critique}\n\n"
+        f"TARGET LENGTH: {target_pages} pages.\n"
+    )
+    user += "\nReturn the complete revised LaTeX source now."
+    return [
+        {
+            "role": "system",
+            "content": _REVISE_SYSTEM.format(
+                target_pages=target_pages, audience=audience, style=_STYLE_RULES
+            ),
+        },
+        {"role": "user", "content": user},
+    ]
+
+
+def revise_once(
+    client,
+    model: str,
+    paper: Paper,
+    current_tex: str,
+    critique: str,
+    target_pages: int,
+    explanation_level: str = "student",
+) -> str:
+    messages = build_revise_messages(
+        paper, current_tex, critique, target_pages, explanation_level
+    )
+    return _strip_fences(client.chat(model, messages))
 
 # Untrusted LLM output must not read arbitrary files into the compiled PDF.
 _DANGEROUS_TEX_RE = re.compile(
@@ -207,11 +286,13 @@ def _page_adjustment(pages: int, target: int) -> str | None:
     if pages > target:
         return (
             f"The draft compiled to {pages} pages; the target is {target}. "
-            "Cut depth: fewer subsections, tighter prose. Keep all key results."
+            "Shorten it: condense or drop the least essential subsections and tighten "
+            "prose. Keep all key results and figures. Change nothing else."
         )
     return (
         f"The draft compiled to only {pages} pages; the target is {target}. "
-        "Expand: explain methods and results in more depth."
+        "Deepen the thinnest sections (methods, results, limitations). "
+        "Keep everything else unchanged."
     )
 
 
@@ -227,7 +308,7 @@ def write_and_refine(
     captions: dict,
     target_pages: int,
     workdir: Path,
-    max_rounds: int = 4,
+    max_rounds: int = 2,
     compile_fn=None,
     on_stage=None,
     explanation_level: str = "student",
@@ -253,38 +334,51 @@ def write_and_refine(
     if on_stage:
         on_stage("draft")
 
-    # single self-repair pass on compile failure
-    if not res.ok:
-        tex = draft_once(
+    # Interactive compile repair: feed the error log back to the writer and let
+    # it fix its own LaTeX, up to MAX_REPAIR_ATTEMPTS attempts. If nothing
+    # compiles, fail the job hard - a job with no PDF is not a deliverable.
+    repair_attempts = 0
+    while not res.ok and repair_attempts < MAX_REPAIR_ATTEMPTS:
+        repair_attempts += 1
+        if on_stage:
+            on_stage("revise")
+        tex = revise_once(
             client,
             writer_model,
             paper,
-            captions,
+            tex,
+            f"Your LaTeX failed to compile. Fix this error with the smallest possible change:\n{truncate(res.log, 4000)}",
             target_pages,
-            fig_map,
-            adjust=f"Your previous LaTeX failed to compile. Error log:\n{truncate(res.log, 4000)}\n"
-            "Return corrected, complete LaTeX.",
+            explanation_level=explanation_level,
         )
         _write_tex(tex, fig_map, tex_path)
         res = compile_fn(tex_path, workdir)
-    else:
-        # single page-budget adjustment
-        adjustment = _page_adjustment(res.pages, target_pages)
-        if adjustment is not None:
-            good = (tex, res)  # the pre-adjustment draft compiled
-            tex = draft_once(
-                client, writer_model, paper, captions, target_pages, fig_map, adjustment
+    if not res.ok:
+        raise CompileFailure(
+            "the writer never produced compilable LaTeX (1 draft + "
+            f"{repair_attempts} error-fed repair attempts). Last compile error: "
+            + (res.log or "unknown")[:400]
+        )
+    good = (tex, res)
+
+    # single page-budget adjustment (targeted edit; revert to the pre-adjust
+    # draft if the recompile breaks)
+    adjustment = _page_adjustment(res.pages, target_pages)
+    if adjustment is not None:
+        tex = revise_once(
+            client, writer_model, paper, tex, adjustment, target_pages,
+            explanation_level=explanation_level,
+        )
+        _write_tex(tex, fig_map, tex_path)
+        res = compile_fn(tex_path, workdir)
+        if not res.ok:
+            notes.append(
+                "length-adjustment revision failed to compile; serving the pre-adjustment draft"
             )
+            tex, res = good
             _write_tex(tex, fig_map, tex_path)
-            res = compile_fn(tex_path, workdir)
-            if not res.ok:
-                notes.append(
-                    "length-adjustment revision failed to compile; serving the pre-adjustment draft"
-                )
-                tex, res = good
-                _write_tex(tex, fig_map, tex_path)
-    if res.ok:
-        good = (tex, res)
+        else:
+            good = (tex, res)
 
     rounds_used = 0
     for round_no in range(1, max_rounds + 1):
@@ -337,14 +431,14 @@ def write_and_refine(
             critique = "The reviewer rejected the draft. Fix every point:\n" + "\n".join(lines)
         if on_stage and round_no < max_rounds:
             on_stage("revise")
-        tex = draft_once(
+        tex = revise_once(
             client,
             writer_model,
             paper,
-            captions,
+            tex,
+            critique,
             target_pages,
-            fig_map,
-            adjust=critique,
+            explanation_level=explanation_level,
         )
         _write_tex(tex, fig_map, tex_path)
         res = compile_fn(tex_path, workdir)
