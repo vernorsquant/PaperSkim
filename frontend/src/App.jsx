@@ -5,7 +5,7 @@ import JobList from "./components/JobList.jsx";
 import JobDetail from "./components/JobDetail.jsx";
 import SearchModal from "./components/SearchModal.jsx";
 import SettingsModal from "./components/SettingsModal.jsx";
-import wallpaper from "./assets/waifu-wallpaper.jpg";
+import wallpaper from "./assets/beach-wallpaper.jpg";
 
 export default function App() {
   const [hasKey, setHasKey] = useState(null);
@@ -71,7 +71,7 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen text-slate-200">
-      {/* waifu wallpaper layer (wallhaven #5g96j3) under a heavy dark veil
+      {/* beach wallpaper layer (wallhaven 7prmdv) under a heavy dark veil
           so the slate UI stays readable */}
       <div
         aria-hidden="true"
